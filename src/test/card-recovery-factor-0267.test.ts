@@ -19,6 +19,8 @@ const SQL_ROLLBACK = readFileSync(join(ROOT, "db-pending", "0267_card_recovery_f
 const OWNER = "00000000-0000-4000-8000-0000000000c1";
 const OTHER = "00000000-0000-4000-8000-0000000000c2";
 const CARD = "00000000-0000-4000-8000-0000000000ca";
+// Unowned cards: activate_member_card spends their grant as 'activation' (db/0246).
+const FRESH_CARDS = ["00000000-0000-4000-8000-0000000000cb", "00000000-0000-4000-8000-0000000000cc"];
 
 describe("parseSdmTapRow / consumeSdmTap (unit)", () => {
   it("accepts only an exact grant row", () => {
@@ -69,9 +71,9 @@ describe("0267 + rollback on a replay of db/", () => {
     }
   };
   const port = new LocalPostgresVaultAdapter(exec);
-  const newGrant = async () => {
+  const newGrant = async (cardId = CARD) => {
     const ref = `tap_${randomBytes(32).toString("hex")}`;
-    await db.query("insert into vault_enclave.sdm_tap_grants (grant_digest, card_id, created_at, expires_at) values ($1, $2, now(), now() + interval '120 seconds')", [createHash("sha256").update(ref).digest(), CARD]);
+    await db.query("insert into vault_enclave.sdm_tap_grants (grant_digest, card_id, created_at, expires_at) values ($1, $2, now(), now() + interval '120 seconds')", [createHash("sha256").update(ref).digest(), cardId]);
     return ref as TapGrant;
   };
   const definition = async () => (await db.query<{ d: string }>("select pg_get_functiondef('vault_enclave.consume_sdm_tap(text, text)'::regprocedure) as d")).rows[0]!.d;
@@ -90,6 +92,9 @@ describe("0267 + rollback on a replay of db/", () => {
     // One owned card; foreign keys to fleet/batch rows are not under test here.
     await db.exec("set session_replication_role = replica");
     await db.query("insert into vault_enclave.sdm_batch_cards (card_id, batch_id, uid_hash, owner_user_id, activated_at) values ($1, gen_random_uuid(), $2, $3, now())", [CARD, randomBytes(32), OWNER]);
+    for (const id of FRESH_CARDS) {
+      await db.query("insert into vault_enclave.sdm_batch_cards (card_id, batch_id, uid_hash) values ($1, gen_random_uuid(), $2)", [id, randomBytes(32)]);
+    }
     await db.exec("set session_replication_role = origin");
     original = await definition();
   }, 300_000);
@@ -124,6 +129,7 @@ describe("0267 + rollback on a replay of db/", () => {
     expect(await definition()).toBe(original);
     const con = await db.query<{ d: string }>("select pg_get_constraintdef(oid) as d from pg_constraint where conname = 'sdm_tap_grants_purpose'");
     expect(con.rows[0]!.d).not.toContain("recovery_factor");
+    expect(con.rows[0]!.d).toContain("activation");
     const rights = await db.query<{ pub: boolean; app: boolean }>("select has_function_privilege('public', 'vault_enclave.consume_sdm_tap(text, text)', 'execute') as pub, has_function_privilege('rout_app', 'vault_enclave.consume_sdm_tap(text, text)', 'execute') as app");
     expect(rights.rows[0]).toEqual({ pub: false, app: true });
     await expect(consumeSdmTap(port, { userId: OWNER }, await newGrant(), "recovery_factor")).rejects.toBeInstanceOf(TapDenied);
@@ -131,5 +137,16 @@ describe("0267 + rollback on a replay of db/", () => {
 
     await apply(SQL_0267);
     expect(await consumeSdmTap(port, { userId: OWNER }, await newGrant(), "recovery_factor")).toBe("active");
+  });
+
+  it("card activation keeps working under 0267 and after its rollback", async () => {
+    // 0267 is applied again at this point (previous test).
+    expect(await port.activateMemberCard({ userId: OWNER }, await newGrant(FRESH_CARDS[0]), null)).toBe(true);
+    await db.exec("delete from vault_enclave.sdm_tap_grants where consumed_for = 'recovery_factor'");
+    await apply(SQL_ROLLBACK);
+    expect(await port.activateMemberCard({ userId: OTHER }, await newGrant(FRESH_CARDS[1]), null)).toBe(true);
+    const spent = await db.query<{ n: number }>("select count(*)::int as n from vault_enclave.sdm_tap_grants where consumed_for = 'activation'");
+    expect(spent.rows[0]!.n).toBe(2);
+    await apply(SQL_0267);
   });
 });
