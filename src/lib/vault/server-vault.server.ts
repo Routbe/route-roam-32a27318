@@ -126,3 +126,52 @@ export async function openServerToken(userId: string, ref: OpaqueToken<"vtk">, p
   const { envelope } = await readVaultEnvelope(userId, ref);
   return openWithServerKey(userId, "vtk", purpose, envelope);
 }
+
+// ---------------------------------------------------------------- OPAQUE setup (opk)
+
+/** Fixed context: there is exactly one purpose for an opk envelope. */
+export const PAKE_SETUP_CONTEXT = "rout.pake.setup.v1";
+const SETUP_KID_LABEL = new TextEncoder().encode("rout.pake.setup-kid");
+
+/** Same derivation as the db-pending/0270 check: SHA-256(label || envelope)[0..16). */
+export async function pakeSetupKid(envelope: Uint8Array): Promise<Uint8Array> {
+  const { sha256 } = await import("@noble/hashes/sha2.js");
+  const input = new Uint8Array(SETUP_KID_LABEL.length + envelope.length);
+  input.set(SETUP_KID_LABEL);
+  input.set(envelope, SETUP_KID_LABEL.length);
+  return sha256(input).slice(0, 16);
+}
+
+/** Seals a fresh OPAQUE server setup for the server vault (caller registers the first server key if needed). */
+export async function sealPakeSetup(
+  caller: VaultCaller,
+  setup: Uint8Array,
+  deps: { port?: IVaultPort; kek?: VaultKek } = {},
+): Promise<{ kid: Uint8Array; envelope: Uint8Array }> {
+  const port = deps.port ?? vaultPort();
+  const kek = deps.kek ?? vaultKekFromEnv();
+  try {
+    const recipientPublicKey = await activeRecipient(port, caller, kek);
+    const envelope = sealEnvelope({ kind: "opk", holder: "server_vault", recipientPublicKey, plaintext: setup, context: PAKE_SETUP_CONTEXT });
+    return { kid: await pakeSetupKid(envelope), envelope };
+  } finally {
+    if (!deps.kek) kek.dispose();
+  }
+}
+
+/** Opens the OPAQUE setup. Needs the Master KEK: a database dump alone never opens it. */
+export async function openPakeSetup(envelope: Uint8Array, deps: { port?: IVaultPort; kek?: VaultKek } = {}): Promise<Uint8Array> {
+  const port = deps.port ?? vaultPort();
+  const kek = deps.kek ?? vaultKekFromEnv();
+  try {
+    const key = await port.systemServerKey(envelopeKeyId(envelope));
+    if (!key) throw new VaultDeniedError();
+    return withServerSeed(kek, key, (secretKey) =>
+      openEnvelope({ envelope, expectedKind: "opk", holder: "server_vault", secretKey, context: PAKE_SETUP_CONTEXT }),
+    );
+  } catch (error) {
+    throw error instanceof VaultDeniedError || error instanceof VaultKekMissingError ? error : new VaultDeniedError();
+  } finally {
+    if (!deps.kek) kek.dispose();
+  }
+}
