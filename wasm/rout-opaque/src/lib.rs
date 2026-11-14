@@ -40,6 +40,19 @@ extern "C" {
     static __heap_base: u8;
 }
 
+/// Allocation is impossible by construction: every request returns null and
+/// traps. The dependency graph links `alloc` (zeroize's default feature) but
+/// no code path in this module allocates; a test runs every export.
+struct NoAlloc;
+unsafe impl core::alloc::GlobalAlloc for NoAlloc {
+    unsafe fn alloc(&self, _: core::alloc::Layout) -> *mut u8 {
+        core::ptr::null_mut()
+    }
+    unsafe fn dealloc(&self, _: *mut u8, _: core::alloc::Layout) {}
+}
+#[global_allocator]
+static ALLOCATOR: NoAlloc = NoAlloc;
+
 #[panic_handler]
 fn panic(_: &core::panic::PanicInfo) -> ! {
     core::arch::wasm32::unreachable()
@@ -185,6 +198,10 @@ pub const LEN_SESSION_KEY: usize = 64;
 pub const LEN_EXPORT_KEY: usize = 64;
 pub const LEN_PUBLIC_KEY: usize = 32;
 
+// Variable-length opaque-ke states are written with their length (u32 LE at
+// the `*_len` pointer); the host keeps them in fixed 512-byte slots.
+const STATE_MAX: usize = 512;
+
 fn len_of(which: u32) -> usize {
     match which {
         1 => LEN_REGISTRATION_REQUEST,
@@ -196,42 +213,24 @@ fn len_of(which: u32) -> usize {
         7 => LEN_SESSION_KEY,
         8 => LEN_EXPORT_KEY,
         9 => LEN_PUBLIC_KEY,
-        10 => ServerSetup::<Suite>::serialize_len(),
-        11 => client_registration_state_len(),
-        12 => client_login_state_len(),
-        13 => server_login_state_len(),
+        10 => STATE_MAX,
         _ => 0,
     }
 }
 
-trait SerializeLen {
-    fn serialize_len() -> usize;
-}
-impl SerializeLen for ServerSetup<Suite> {
-    fn serialize_len() -> usize {
-        <ServerSetup<Suite>>::serialize_len_inner()
+unsafe fn write_sized(ptr: usize, len_ptr: usize, bytes: &[u8]) -> Result<(), i32> {
+    if bytes.len() > STATE_MAX {
+        return Err(E_ARGS);
     }
+    write(ptr, bytes)?;
+    write(len_ptr, &(bytes.len() as u32).to_le_bytes())
 }
-trait Inner {
-    fn serialize_len_inner() -> usize;
-}
-impl Inner for ServerSetup<Suite> {
-    fn serialize_len_inner() -> usize {
-        use generic_array::typenum::Unsigned;
-        <opaque_ke::ServerSetupLen<Suite, opaque_ke::keypair::PrivateKey<Ristretto255>, opaque_ke::keypair::PrivateKey<Ristretto255>> as Unsigned>::USIZE
+
+unsafe fn sized_input<'a>(ptr: usize, len: usize) -> Result<&'a [u8], i32> {
+    if len == 0 || len > STATE_MAX {
+        return Err(E_ARGS);
     }
-}
-fn client_registration_state_len() -> usize {
-    use generic_array::typenum::Unsigned;
-    <opaque_ke::ClientRegistrationLen<Suite> as Unsigned>::USIZE
-}
-fn client_login_state_len() -> usize {
-    use generic_array::typenum::Unsigned;
-    <opaque_ke::ClientLoginLen<Suite> as Unsigned>::USIZE
-}
-fn server_login_state_len() -> usize {
-    use generic_array::typenum::Unsigned;
-    <opaque_ke::Ke2StateLen<Suite> as Unsigned>::USIZE
+    input(ptr, len).ok_or(E_ARGS)
 }
 
 fn ksf(m_kib: u32, t: u32, p: u32, blocks: usize) -> RoutArgon2id {
@@ -277,18 +276,18 @@ pub unsafe extern "C" fn rout_argon2id(
 // --- client
 
 #[no_mangle]
-pub unsafe extern "C" fn rout_client_register_start(pwd: usize, pwd_len: usize, out_request: usize, out_state: usize) -> i32 {
+pub unsafe extern "C" fn rout_client_register_start(pwd: usize, pwd_len: usize, out_request: usize, out_state: usize, out_state_len: usize) -> i32 {
     code((|| {
         let pwd = input(pwd, pwd_len).ok_or(E_ARGS)?;
         let started = ClientRegistration::<Suite>::start(&mut HostRng, pwd).map_err(|_| E_PROTOCOL)?;
         write(out_request, &started.message.serialize())?;
-        write(out_state, &started.state.serialize())
+        write_sized(out_state, out_state_len, &started.state.serialize())
     })())
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn rout_client_register_finish(
-    pwd: usize, pwd_len: usize, state: usize, response: usize,
+    pwd: usize, pwd_len: usize, state: usize, state_len: usize, response: usize,
     m_kib: u32, t: u32, p: u32, blocks: usize,
     out_upload: usize, out_export_key: usize, out_server_pk: usize,
 ) -> i32 {
@@ -297,7 +296,7 @@ pub unsafe extern "C" fn rout_client_register_finish(
             return Err(E_KSF);
         }
         let pwd = input(pwd, pwd_len).ok_or(E_ARGS)?;
-        let state = ClientRegistration::<Suite>::deserialize(input(state, client_registration_state_len()).ok_or(E_ARGS)?)
+        let state = ClientRegistration::<Suite>::deserialize(sized_input(state, state_len)?)
             .map_err(|_| E_DECODE)?;
         let response = RegistrationResponse::<Suite>::deserialize(input(response, LEN_REGISTRATION_RESPONSE).ok_or(E_ARGS)?)
             .map_err(|_| E_DECODE)?;
@@ -314,18 +313,18 @@ pub unsafe extern "C" fn rout_client_register_finish(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn rout_client_login_start(pwd: usize, pwd_len: usize, out_ke1: usize, out_state: usize) -> i32 {
+pub unsafe extern "C" fn rout_client_login_start(pwd: usize, pwd_len: usize, out_ke1: usize, out_state: usize, out_state_len: usize) -> i32 {
     code((|| {
         let pwd = input(pwd, pwd_len).ok_or(E_ARGS)?;
         let started = ClientLogin::<Suite>::start(&mut HostRng, pwd).map_err(|_| E_PROTOCOL)?;
         write(out_ke1, &started.message.serialize())?;
-        write(out_state, &started.state.serialize())
+        write_sized(out_state, out_state_len, &started.state.serialize())
     })())
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn rout_client_login_finish(
-    pwd: usize, pwd_len: usize, state: usize, ke2: usize, ctx: usize, ctx_len: usize,
+    pwd: usize, pwd_len: usize, state: usize, state_len: usize, ke2: usize, ctx: usize, ctx_len: usize,
     m_kib: u32, t: u32, p: u32, blocks: usize,
     out_ke3: usize, out_session_key: usize, out_export_key: usize, out_server_pk: usize,
 ) -> i32 {
@@ -335,7 +334,7 @@ pub unsafe extern "C" fn rout_client_login_finish(
         }
         let pwd = input(pwd, pwd_len).ok_or(E_ARGS)?;
         let context = input(ctx, ctx_len).ok_or(E_ARGS)?;
-        let state = ClientLogin::<Suite>::deserialize(input(state, client_login_state_len()).ok_or(E_ARGS)?)
+        let state = ClientLogin::<Suite>::deserialize(sized_input(state, state_len)?)
             .map_err(|_| E_DECODE)?;
         let ke2 = CredentialResponse::<Suite>::deserialize(input(ke2, LEN_KE2).ok_or(E_ARGS)?).map_err(|_| E_DECODE)?;
         let stretch = ksf(m_kib, t, p, blocks);
@@ -354,30 +353,29 @@ pub unsafe extern "C" fn rout_client_login_finish(
 // --- server
 
 #[no_mangle]
-pub unsafe extern "C" fn rout_server_setup_new(out_setup: usize) -> i32 {
+pub unsafe extern "C" fn rout_server_setup_new(out_setup: usize, out_setup_len: usize) -> i32 {
     code((|| {
         let setup = ServerSetup::<Suite>::new(&mut HostRng);
-        write(out_setup, &setup.serialize())
+        write_sized(out_setup, out_setup_len, &setup.serialize())
     })())
 }
 
-unsafe fn load_setup(setup: usize) -> Result<ServerSetup<Suite>, i32> {
-    let len = ServerSetup::<Suite>::serialize_len();
-    ServerSetup::<Suite>::deserialize(input(setup, len).ok_or(E_ARGS)?).map_err(|_| E_DECODE)
+unsafe fn load_setup(setup: usize, setup_len: usize) -> Result<ServerSetup<Suite>, i32> {
+    ServerSetup::<Suite>::deserialize(sized_input(setup, setup_len)?).map_err(|_| E_DECODE)
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn rout_server_public_key(setup: usize, out_pk: usize) -> i32 {
+pub unsafe extern "C" fn rout_server_public_key(setup: usize, setup_len: usize, out_pk: usize) -> i32 {
     code((|| {
-        let setup = load_setup(setup)?;
+        let setup = load_setup(setup, setup_len)?;
         write(out_pk, &setup.keypair().public().serialize())
     })())
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn rout_server_register_start(setup: usize, request: usize, cred: usize, cred_len: usize, out_response: usize) -> i32 {
+pub unsafe extern "C" fn rout_server_register_start(setup: usize, setup_len: usize, request: usize, cred: usize, cred_len: usize, out_response: usize) -> i32 {
     code((|| {
-        let setup = load_setup(setup)?;
+        let setup = load_setup(setup, setup_len)?;
         let request = RegistrationRequest::<Suite>::deserialize(input(request, LEN_REGISTRATION_REQUEST).ok_or(E_ARGS)?)
             .map_err(|_| E_DECODE)?;
         let cred = input(cred, cred_len).ok_or(E_ARGS)?;
@@ -403,14 +401,14 @@ pub unsafe extern "C" fn rout_server_register_finish(upload: usize, out_record: 
 /// response is indistinguishable and the later finish always fails.
 #[no_mangle]
 pub unsafe extern "C" fn rout_server_login_start(
-    setup: usize, record: usize, ke1: usize, cred: usize, cred_len: usize, ctx: usize, ctx_len: usize,
-    out_ke2: usize, out_state: usize,
+    setup: usize, setup_len: usize, record: usize, ke1: usize, cred: usize, cred_len: usize, ctx: usize, ctx_len: usize,
+    out_ke2: usize, out_state: usize, out_state_len: usize,
 ) -> i32 {
     code((|| {
         if ctx_len > CONTEXT_MAX {
             return Err(E_ARGS);
         }
-        let setup = load_setup(setup)?;
+        let setup = load_setup(setup, setup_len)?;
         let password_file = if record == 0 {
             None
         } else {
@@ -425,17 +423,17 @@ pub unsafe extern "C" fn rout_server_login_start(
         let params = ServerLoginParameters { context: Some(context), identifiers: Identifiers { client: None, server: None } };
         let started = ServerLogin::start(&mut HostRng, &setup, password_file, ke1, cred, params).map_err(|_| E_PROTOCOL)?;
         write(out_ke2, &started.message.serialize())?;
-        write(out_state, &started.state.serialize())
+        write_sized(out_state, out_state_len, &started.state.serialize())
     })())
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn rout_server_login_finish(state: usize, ke3: usize, ctx: usize, ctx_len: usize, out_session_key: usize) -> i32 {
+pub unsafe extern "C" fn rout_server_login_finish(state: usize, state_len: usize, ke3: usize, ctx: usize, ctx_len: usize, out_session_key: usize) -> i32 {
     code((|| {
         if ctx_len > CONTEXT_MAX {
             return Err(E_ARGS);
         }
-        let state = ServerLogin::<Suite>::deserialize(input(state, server_login_state_len()).ok_or(E_ARGS)?).map_err(|_| E_DECODE)?;
+        let state = ServerLogin::<Suite>::deserialize(sized_input(state, state_len)?).map_err(|_| E_DECODE)?;
         let ke3 = CredentialFinalization::<Suite>::deserialize(input(ke3, LEN_KE3).ok_or(E_ARGS)?).map_err(|_| E_DECODE)?;
         let context = input(ctx, ctx_len).ok_or(E_ARGS)?;
         let params = ServerLoginParameters { context: Some(context), identifiers: Identifiers { client: None, server: None } };
