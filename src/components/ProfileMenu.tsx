@@ -94,17 +94,26 @@ export function ProfileMenu() {
 
   // Until INITIAL_SESSION resolved we must not claim "logged out" — that flicker
   // is exactly what an OAuth return looks like right before the hash is read.
+  // The placeholder has the signed-out button's exact box (same Button, invisible
+  // label), so the most common outcome for visitors moves nothing (CLS).
   if (loading) {
+    if (pathname.startsWith("/auth") || pathname.startsWith("/login")) return null;
     return (
-      <div
-        role="status"
-        aria-label={trI18n.t("menu.checkingSession")}
-        aria-busy="true"
-        className="flex h-9 items-center gap-2 rounded-xl border border-border pl-1 pr-2"
-      >
-        <span className="h-7 w-7 animate-pulse rounded-lg bg-muted" />
-        <span className="hidden h-3 w-20 animate-pulse rounded bg-muted sm:inline-block" />
-      </div>
+      <HeaderControl name="account">
+        <Button
+          type="button"
+          size="sm"
+          variant="ghost"
+          disabled
+          role="status"
+          aria-label={trI18n.t("menu.checkingSession")}
+          aria-busy="true"
+          className="disabled:opacity-100"
+        >
+          <span aria-hidden className="invisible">{trI18n.t("nav.signIn")}</span>
+          <span aria-hidden className="absolute inset-1 animate-pulse rounded-md bg-muted" />
+        </Button>
+      </HeaderControl>
     );
   }
 
