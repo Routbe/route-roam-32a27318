@@ -98,6 +98,13 @@ Key(m)  == <<m.c, m.n>>
 Fresh(p) == p # 0 /\ proofs[p] = "fresh"
 Consume(p) == IF Fresh(p) THEN [proofs EXCEPT ![p] = "used"] ELSE proofs
 
+\* Idempotency keys that can still be presented: a request in flight or the
+\* current request of a waiting session. Keys are never reused, so a stored
+\* answer for any other key can never be read again; it is pruned (in the
+\* database such rows age out). This keeps the state space canonical.
+Live(ms, p) == {Key(x) : x \in ms} \cup {<<c, nreq[c]>> : c \in {d \in Clients : p[d] = "wait"}}
+Prune(t, ms, p) == [k \in Keys |-> IF k \in Live(ms, p) THEN t[k] ELSE NoResp]
+
 Resp(m, ok, why, cid, v, l, p, a) ==
   [c |-> m.c, n |-> m.n, op |-> m.op, ok |-> ok, why |-> why, cid |-> cid,
    ver |-> v, level |-> l, pend |-> p, act |-> a]
@@ -212,6 +219,7 @@ Finish(c) ==
 \* Timeout: resend the SAME request (same idempotency key).
 Retry(c) ==
   /\ pc[c] = "wait" /\ outReq[c] \notin msgs
+  /\ ~\E r \in resps : r.c = c /\ r.n = nreq[c]
   /\ msgs' = msgs \cup {outReq[c]}
   /\ UNCHANGED <<dbVars, cardHolds, cliVars, resps, faults>>
 
@@ -219,20 +227,21 @@ Recv(c) ==
   /\ pc[c] = "wait"
   /\ \E r \in resps :
        /\ r.c = c /\ r.n = nreq[c]
+       /\ LET next == IF r.ok /\ r.op = "begin" THEN (IF pol[c] = "3of4" THEN "staged" ELSE "ready")
+                     ELSE IF r.ok /\ r.op = "confirm" THEN "ready"
+                     ELSE IF r.ok /\ r.op = "commit" THEN "committed"
+                     ELSE "idle"
+              pcN  == [pc EXCEPT ![c] = next]
+          IN /\ pc' = pcN
+             /\ cur' = [cur EXCEPT ![c] = IF next = "idle" THEN 0
+                                           ELSE IF r.op = "begin" THEN r.cid ELSE cur[c]]
+             /\ pol' = IF next = "idle" THEN [pol EXCEPT ![c] = "none"] ELSE pol
+             /\ idem' = Prune(idem, msgs, pcN)
        /\ resps' = resps \ {r}
        /\ seen' = [seen EXCEPT ![c] = [ver |-> r.ver, level |-> r.level, pend |-> r.pend,
                                         act |-> IF UseCAS THEN 0 ELSE r.act]]
-       /\ IF r.ok /\ r.op = "begin"
-            THEN /\ pc' = [pc EXCEPT ![c] = IF pol[c] = "3of4" THEN "staged" ELSE "ready"]
-                 /\ cur' = [cur EXCEPT ![c] = r.cid]
-          ELSE IF r.ok /\ r.op = "confirm"
-            THEN pc' = [pc EXCEPT ![c] = "ready"] /\ UNCHANGED cur
-          ELSE IF r.ok /\ r.op = "commit"
-            THEN pc' = [pc EXCEPT ![c] = "committed"] /\ UNCHANGED cur
-          ELSE pc' = [pc EXCEPT ![c] = "idle"] /\ cur' = [cur EXCEPT ![c] = 0]
-       /\ pol' = IF r.ok /\ r.op \in {"begin", "confirm", "commit"} THEN pol ELSE [pol EXCEPT ![c] = "none"]
   /\ outReq' = [outReq EXCEPT ![c] = NoReq]
-  /\ UNCHANGED <<dbVars, cardHolds, nreq, msgs, faults>>
+  /\ UNCHANGED <<cer, level, ver, gen, card, proofs, nextId, cardHolds, nreq, msgs, faults>>
 
 \* Late or duplicate answers for an earlier request or a dead session are ignored.
 Discard ==
@@ -245,7 +254,7 @@ Discard ==
 (* Server: each action is ONE transaction over the master row.             *)
 
 Answer(m, r) ==
-  /\ idem' = [idem EXCEPT ![Key(m)] = r]
+  /\ idem' = Prune([idem EXCEPT ![Key(m)] = r], msgs \ {m}, pc)
   /\ resps' = resps \cup {r}
   /\ msgs' = msgs \ {m}
 
@@ -258,7 +267,8 @@ Replay(m) ==
   /\ idem[Key(m)] # NoResp
   /\ resps' = resps \cup {idem[Key(m)]}
   /\ msgs' = msgs \ {m}
-  /\ UNCHANGED <<cer, level, ver, gen, card, proofs, idem, nextId>>
+  /\ idem' = Prune(idem, msgs \ {m}, pc)
+  /\ UNCHANGED <<cer, level, ver, gen, card, proofs, nextId>>
 
 SBegin(m) ==
   /\ m.op = "begin" /\ idem[Key(m)] = NoResp
@@ -377,14 +387,16 @@ Crash(c) ==
   /\ pc[c] # "idle" /\ faults < MaxFaults
   /\ pc' = [pc EXCEPT ![c] = "idle"] /\ cur' = [cur EXCEPT ![c] = 0]
   /\ outReq' = [outReq EXCEPT ![c] = NoReq] /\ pol' = [pol EXCEPT ![c] = "none"]
+  /\ idem' = Prune(idem, msgs, [pc EXCEPT ![c] = "idle"])
   /\ faults' = faults + 1
-  /\ UNCHANGED <<dbVars, cardHolds, seen, nreq, msgs, resps>>
+  /\ UNCHANGED <<cer, level, ver, gen, card, proofs, nextId, cardHolds, seen, nreq, msgs, resps>>
 
 \* The pooler / network drops a request before, or an answer after, its transaction.
 DropMsg ==
-  /\ faults < MaxFaults /\ \E m \in msgs : msgs' = msgs \ {m}
+  /\ faults < MaxFaults
+  /\ \E m \in msgs : msgs' = msgs \ {m} /\ idem' = Prune(idem, msgs \ {m}, pc)
   /\ faults' = faults + 1
-  /\ UNCHANGED <<dbVars, cardHolds, cliVars, resps>>
+  /\ UNCHANGED <<cer, level, ver, gen, card, proofs, nextId, cardHolds, cliVars, resps>>
 
 DropResp ==
   /\ faults < MaxFaults /\ \E r \in resps : resps' = resps \ {r}
@@ -418,15 +430,6 @@ Fairness ==
   /\ \A c \in Clients : WF_vars(Recv(c)) /\ WF_vars(Retry(c)) /\ WF_vars(Progress(c))
 
 Spec == Init /\ [][Next]_vars /\ Fairness
-
-\* Idempotency keys that can still be presented: a request in flight or the
-\* current request of a waiting session. Every other stored answer can never
-\* be read again (keys are never reused), so the state VIEW forgets it; in
-\* the database such rows simply age out.
-LiveKeys == {Key(m) : m \in msgs} \cup {<<c, nreq[c]>> : c \in {d \in Clients : pc[d] = "wait"}}
-LiveIdem == [k \in Keys |-> IF k \in LiveKeys THEN idem[k] ELSE NoResp]
-Perms == Permutations(Clients)
-View == <<cer, level, ver, gen, card, proofs, LiveIdem, nextId, cardHolds, cliVars, msgs, resps, faults>>
 
 -----------------------------------------------------------------------------
 (* Properties.                                                             *)
@@ -468,7 +471,7 @@ NoHalfOpen == \A x \in Active : x.pol = "3of4" => x.cardSt = "confirmed"
 NoSplitBrain ==
   /\ \A c \in Clients : pc[c] = "committed" => Cer(cur[c]).status \in {"active", "revoked"}
   /\ \A c \in Clients : pc[c] \in {"staged", "cardOk", "ready"} => \E x \in cer : x.id = cur[c]
-  /\ \A r \in resps \cup {idem[k] : k \in LiveKeys} :
+  /\ \A r \in resps \cup {idem[k] : k \in Keys} :
        (r.ok /\ r.op = "commit") => Cer(r.cid).status \in {"active", "revoked"}
 
 \* Card loss never makes the active vault unrecoverable for its owner.
