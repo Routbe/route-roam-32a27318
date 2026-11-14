@@ -29,7 +29,7 @@
 (* and TLC must then find a counterexample (see run-tlc.sh), which proves  *)
 (* that every invariant really guards something.                           *)
 (***************************************************************************)
-EXTENDS Naturals, FiniteSets, TLC
+EXTENDS Integers, FiniteSets, TLC
 
 CONSTANTS Clients,               \* sessions/devices of the SAME member
           MaxCeremonies,         \* ceremony ids that may be created
