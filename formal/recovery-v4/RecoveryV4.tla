@@ -83,11 +83,11 @@ VARIABLES
   \* network (HTTP over the pooler)
   msgs, resps,
   \* bookkeeping
-  faults, ev
+  faults
 
 dbVars  == <<cer, level, ver, gen, card, proofs, idem, nextId>>
 cliVars == <<pc, seen, cur, pol, nreq, proof, outReq>>
-vars    == <<dbVars, cardHolds, cliVars, msgs, resps, faults, ev>>
+vars    == <<dbVars, cardHolds, cliVars, msgs, resps, faults>>
 
 Pending == {x \in cer : x.status = "pending"}
 Active  == {x \in cer : x.status = "active"}
@@ -120,7 +120,7 @@ Init ==
   /\ pc = [c \in Clients |-> "idle"] /\ cur = [c \in Clients |-> 0]
   /\ pol = [c \in Clients |-> "none"] /\ nreq = [c \in Clients |-> 0]
   /\ proof = [c \in Clients |-> 0] /\ outReq = [c \in Clients |-> NoReq]
-  /\ msgs = {} /\ resps = {} /\ faults = 0 /\ ev = "init"
+  /\ msgs = {} /\ resps = {} /\ faults = 0
 
 -----------------------------------------------------------------------------
 (* Clients. A request carries everything the server needs; nothing else    *)
@@ -144,7 +144,6 @@ StepUp(c) ==
        /\ proofs[p] = "unissued"
        /\ proofs' = [proofs EXCEPT ![p] = "fresh"]
        /\ proof' = [proof EXCEPT ![c] = p]
-  /\ ev' = "stepup"
   /\ UNCHANGED <<cer, level, ver, gen, card, idem, nextId, cardHolds,
                  pc, seen, cur, pol, nreq, outReq, msgs, resps, faults>>
 
@@ -153,20 +152,17 @@ StartBegin(c) ==
   /\ \E kp \in BeginKinds(seen[c].level) :
        /\ Send(c, "begin", kp[1], kp[2], 0, proof[c], 0)
        /\ pol' = [pol EXCEPT ![c] = kp[2]]
-  /\ ev' = "send"
   /\ UNCHANGED <<dbVars, cardHolds, seen, cur, resps, faults>>
 
 StartRemove(c) ==
   /\ pc[c] = "idle" /\ seen[c].level # "none"
   /\ Send(c, "remove", "remove", "none", 0, proof[c], 0)
-  /\ ev' = "send"
   /\ UNCHANGED <<dbVars, cardHolds, seen, cur, pol, resps, faults>>
 
 \* A new session finds a pending ceremony (its own crashed one or another device's).
 StartAbortStale(c) ==
   /\ pc[c] = "idle" /\ seen[c].pend # 0
   /\ Send(c, "abort", "none", "none", seen[c].pend, 0, 0)
-  /\ ev' = "send"
   /\ UNCHANGED <<dbVars, cardHolds, seen, cur, pol, resps, faults>>
 
 \* NFC write of the new #rk1 share to the card (client side, no server involved).
@@ -174,7 +170,6 @@ WriteCard(c) ==
   /\ pc[c] = "staged" /\ card = "linked"
   /\ cardHolds' = cur[c]
   /\ pc' = [pc EXCEPT ![c] = "cardOk"]
-  /\ ev' = "write"
   /\ UNCHANGED <<dbVars, seen, cur, pol, nreq, proof, outReq, msgs, resps, faults>>
 
 \* The card leaves the field halfway: the NDEF record is torn.
@@ -182,46 +177,39 @@ CardPulled(c) ==
   /\ pc[c] = "staged" /\ card = "linked" /\ faults < MaxFaults
   /\ cardHolds' = -1
   /\ faults' = faults + 1
-  /\ ev' = "pulled"
   /\ UNCHANGED <<dbVars, cliVars, msgs, resps>>
 
 \* Tap proof (SDM, purpose recovery_factor, db/0267): binds what the card really holds.
 SendConfirm(c) ==
   /\ pc[c] = "cardOk"
   /\ Send(c, "confirm", "none", "none", cur[c], 0, cardHolds)
-  /\ ev' = "send"
   /\ UNCHANGED <<dbVars, cardHolds, seen, cur, pol, resps, faults>>
 
 SendCommit(c) ==
   /\ pc[c] = "ready"
   /\ Send(c, "commit", "none", "none", cur[c], proof[c], 0)
-  /\ ev' = "send"
   /\ UNCHANGED <<dbVars, cardHolds, seen, cur, pol, resps, faults>>
 
 SendAbort(c) ==
   /\ pc[c] \in {"staged", "cardOk", "ready"}
   /\ Send(c, "abort", "none", "none", cur[c], 0, 0)
-  /\ ev' = "send"
   /\ UNCHANGED <<dbVars, cardHolds, seen, cur, pol, resps, faults>>
 
 \* Out of requests: the user closes the tab; the database TTL cleans up.
 Abandon(c) ==
   /\ pc[c] \in {"staged", "cardOk", "ready"} /\ nreq[c] = MaxReq
   /\ pc' = [pc EXCEPT ![c] = "idle"] /\ cur' = [cur EXCEPT ![c] = 0]
-  /\ ev' = "abandon"
   /\ UNCHANGED <<dbVars, cardHolds, seen, pol, nreq, proof, outReq, msgs, resps, faults>>
 
 Finish(c) ==
   /\ pc[c] = "committed"
   /\ pc' = [pc EXCEPT ![c] = "idle"] /\ cur' = [cur EXCEPT ![c] = 0]
-  /\ ev' = "finish"
   /\ UNCHANGED <<dbVars, cardHolds, seen, pol, nreq, proof, outReq, msgs, resps, faults>>
 
 \* Timeout: resend the SAME request (same idempotency key).
 Retry(c) ==
   /\ pc[c] = "wait" /\ outReq[c] \notin msgs
   /\ msgs' = msgs \cup {outReq[c]}
-  /\ ev' = "retry"
   /\ UNCHANGED <<dbVars, cardHolds, cliVars, resps, faults>>
 
 Recv(c) ==
@@ -238,7 +226,6 @@ Recv(c) ==
           ELSE IF r.ok /\ r.op = "commit"
             THEN pc' = [pc EXCEPT ![c] = "committed"] /\ UNCHANGED cur
           ELSE pc' = [pc EXCEPT ![c] = "idle"] /\ cur' = [cur EXCEPT ![c] = 0]
-  /\ ev' = "recv"
   /\ UNCHANGED <<dbVars, cardHolds, pol, nreq, proof, outReq, msgs, faults>>
 
 \* Late or duplicate answers for an earlier request or a dead session are ignored.
@@ -246,7 +233,6 @@ Discard ==
   /\ \E r \in resps :
        /\ pc[r.c] # "wait" \/ r.n # nreq[r.c]
        /\ resps' = resps \ {r}
-  /\ ev' = "discard"
   /\ UNCHANGED <<dbVars, cardHolds, cliVars, msgs, faults>>
 
 -----------------------------------------------------------------------------
@@ -259,7 +245,6 @@ Answer(m, r) ==
 
 Refuse(m, why) ==
   /\ Answer(m, Resp(m, FALSE, why, 0, ver, level, IdOf(Pending), IdOf(Active)))
-  /\ ev' = "refuse"
   /\ UNCHANGED <<cer, level, ver, gen, card, proofs, nextId>>
 
 \* A key already answered returns the stored answer and changes nothing.
@@ -267,7 +252,6 @@ Replay(m) ==
   /\ idem[Key(m)] # NoResp
   /\ resps' = resps \cup {idem[Key(m)]}
   /\ msgs' = msgs \ {m}
-  /\ ev' = "replay"
   /\ UNCHANGED <<cer, level, ver, gen, card, proofs, idem, nextId>>
 
 SBegin(m) ==
@@ -288,7 +272,6 @@ SBegin(m) ==
                 /\ ver' = ver + 1 /\ nextId' = nextId + 1
                 /\ proofs' = Consume(m.pf)
                 /\ Answer(m, Resp(m, TRUE, "ok", nextId, ver + 1, level, nextId, IdOf(Active)))
-                /\ ev' = "begin"
                 /\ UNCHANGED <<level, gen, card>>
 
 SConfirm(m) ==
@@ -302,7 +285,6 @@ SConfirm(m) ==
         ELSE /\ cer' = {IF y.id = m.cid THEN [y EXCEPT !.cardSt = "confirmed"] ELSE y : y \in cer}
              /\ ver' = ver + 1
              /\ Answer(m, Resp(m, TRUE, "ok", m.cid, ver + 1, level, IdOf(Pending), IdOf(Active)))
-             /\ ev' = "confirm"
              /\ UNCHANGED <<level, gen, card, proofs, nextId>>
 
 SCommit(m) ==
@@ -324,7 +306,6 @@ SCommit(m) ==
              /\ level' = x.pol /\ gen' = x.gen /\ ver' = ver + 1
              /\ proofs' = Consume(m.pf)
              /\ Answer(m, Resp(m, TRUE, "ok", m.cid, ver + 1, x.pol, IdOf(Pending \ {x}), m.cid))
-             /\ ev' = "commit"
              /\ UNCHANGED <<card, nextId>>
 
 \* Always allowed for the member; it never touches the active ceremony.
@@ -334,7 +315,6 @@ SAbort(m) ==
      ELSE /\ cer' = {IF y.id = m.cid THEN [y EXCEPT !.status = "aborted"] ELSE y : y \in cer}
           /\ ver' = ver + 1
           /\ Answer(m, Resp(m, TRUE, "ok", m.cid, ver + 1, level, 0, IdOf(Active)))
-          /\ ev' = "abort"
           /\ UNCHANGED <<level, gen, card, proofs, nextId>>
 
 \* Deleting the vault lowers the level to none, so it also needs a fresh step-up.
@@ -351,7 +331,6 @@ SRemove(m) ==
              /\ level' = "none" /\ gen' = 0 /\ ver' = ver + 1
              /\ proofs' = Consume(m.pf)
              /\ Answer(m, Resp(m, TRUE, "ok", 0, ver + 1, "none", 0, 0))
-             /\ ev' = "remove"
              /\ UNCHANGED <<card, nextId>>
 
 Server ==
@@ -366,12 +345,10 @@ Server ==
 ExpirePending ==
   /\ \E x \in Pending : cer' = (cer \ {x}) \cup {[x EXCEPT !.status = "aborted"]}
   /\ ver' = ver + 1
-  /\ ev' = "expire"
   /\ UNCHANGED <<level, gen, card, proofs, idem, nextId, cardHolds, cliVars, msgs, resps, faults>>
 
 ExpireProof ==
   /\ \E p \in Steps : proofs[p] = "fresh" /\ proofs' = [proofs EXCEPT ![p] = "expired"]
-  /\ ev' = "proofExpired"
   /\ UNCHANGED <<cer, level, ver, gen, card, idem, nextId, cardHolds, cliVars, msgs, resps, faults>>
 
 \* Certified unlink (lost card). The level stays; a pending 3of4 needs a new tap.
@@ -380,7 +357,6 @@ CardUnlink ==
   /\ card' = "unlinked"
   /\ cer' = {IF y.status = "pending" /\ y.cardSt = "confirmed" THEN [y EXCEPT !.cardSt = "unconfirmed"] ELSE y : y \in cer}
   /\ ver' = ver + 1 /\ faults' = faults + 1
-  /\ ev' = "unlink"
   /\ UNCHANGED <<level, gen, proofs, idem, nextId, cardHolds, cliVars, msgs, resps>>
 
 \* A new, blank card is linked.
@@ -388,7 +364,6 @@ CardRelink ==
   /\ card = "unlinked" /\ faults < MaxFaults
   /\ card' = "linked" /\ cardHolds' = 0
   /\ ver' = ver + 1 /\ faults' = faults + 1
-  /\ ev' = "relink"
   /\ UNCHANGED <<cer, level, gen, proofs, idem, nextId, cliVars, msgs, resps>>
 
 \* Session expiry, logout, tab close or crypto-worker teardown: volatile state is gone.
@@ -397,18 +372,17 @@ Crash(c) ==
   /\ pc' = [pc EXCEPT ![c] = "idle"] /\ cur' = [cur EXCEPT ![c] = 0]
   /\ proof' = [proof EXCEPT ![c] = 0]
   /\ faults' = faults + 1
-  /\ ev' = "crash"
   /\ UNCHANGED <<dbVars, cardHolds, seen, pol, nreq, outReq, msgs, resps>>
 
 \* The pooler / network drops a request before, or an answer after, its transaction.
 DropMsg ==
   /\ faults < MaxFaults /\ \E m \in msgs : msgs' = msgs \ {m}
-  /\ faults' = faults + 1 /\ ev' = "dropReq"
+  /\ faults' = faults + 1
   /\ UNCHANGED <<dbVars, cardHolds, cliVars, resps>>
 
 DropResp ==
   /\ faults < MaxFaults /\ \E r \in resps : resps' = resps \ {r}
-  /\ faults' = faults + 1 /\ ev' = "dropResp"
+  /\ faults' = faults + 1
   /\ UNCHANGED <<dbVars, cardHolds, cliVars, msgs>>
 
 \* Nothing left to do: every session idle and out of requests, nothing in flight.
@@ -495,10 +469,11 @@ AuthorizedDowngrade ==
   [][K(level') < K(level) => \E p \in Steps : proofs[p] = "fresh" /\ proofs'[p] = "used"]_vars
 
 \* (4) An unlinked card never degrades the vault.
-CardNeverDegrades == [][ev' = "unlink" => level' = level]_vars
+CardNeverDegrades == [][(card = "linked" /\ card' = "unlinked") => level' = level]_vars
 
 \* (3)/(6) The active ceremony changes only by commit or an authorised remove.
-ActiveOnlyByCommit == [][Active' # Active => ev' \in {"commit", "remove"}]_vars
+ActiveOnlyByCommit ==
+  [][Active' # Active => \E m \in msgs : m.op \in {"commit", "remove"} /\ m \notin msgs' /\ idem[Key(m)] = NoResp]_vars
 
 \* (3) Every pending ceremony ends: committed or safely rolled back.
 CeremonyTerminates ==
