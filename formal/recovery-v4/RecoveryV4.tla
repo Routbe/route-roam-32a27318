@@ -226,7 +226,8 @@ Recv(c) ==
           ELSE IF r.ok /\ r.op = "commit"
             THEN pc' = [pc EXCEPT ![c] = "committed"] /\ UNCHANGED cur
           ELSE pc' = [pc EXCEPT ![c] = "idle"] /\ cur' = [cur EXCEPT ![c] = 0]
-  /\ UNCHANGED <<dbVars, cardHolds, pol, nreq, proof, outReq, msgs, faults>>
+  /\ outReq' = [outReq EXCEPT ![c] = NoReq]
+  /\ UNCHANGED <<dbVars, cardHolds, pol, nreq, proof, msgs, faults>>
 
 \* Late or duplicate answers for an earlier request or a dead session are ignored.
 Discard ==
@@ -370,9 +371,9 @@ CardRelink ==
 Crash(c) ==
   /\ pc[c] # "idle" /\ faults < MaxFaults
   /\ pc' = [pc EXCEPT ![c] = "idle"] /\ cur' = [cur EXCEPT ![c] = 0]
-  /\ proof' = [proof EXCEPT ![c] = 0]
+  /\ proof' = [proof EXCEPT ![c] = 0] /\ outReq' = [outReq EXCEPT ![c] = NoReq]
   /\ faults' = faults + 1
-  /\ UNCHANGED <<dbVars, cardHolds, seen, pol, nreq, outReq, msgs, resps>>
+  /\ UNCHANGED <<dbVars, cardHolds, seen, pol, nreq, msgs, resps>>
 
 \* The pooler / network drops a request before, or an answer after, its transaction.
 DropMsg ==
@@ -412,6 +413,15 @@ Fairness ==
   /\ \A c \in Clients : WF_vars(Recv(c)) /\ WF_vars(Retry(c)) /\ WF_vars(Progress(c))
 
 Spec == Init /\ [][Next]_vars /\ Fairness
+
+\* Idempotency keys that can still be presented: a request in flight or the
+\* current request of a waiting session. Every other stored answer can never
+\* be read again (keys are never reused), so the state VIEW forgets it; in
+\* the database such rows simply age out.
+LiveKeys == {Key(m) : m \in msgs} \cup {<<c, nreq[c]>> : c \in {d \in Clients : pc[d] = "wait"}}
+LiveIdem == [k \in Keys |-> IF k \in LiveKeys THEN idem[k] ELSE NoResp]
+Perms == Permutations(Clients)
+View == <<cer, level, ver, gen, card, proofs, LiveIdem, nextId, cardHolds, cliVars, msgs, resps, faults>>
 
 -----------------------------------------------------------------------------
 (* Properties.                                                             *)
@@ -453,8 +463,8 @@ NoHalfOpen == \A x \in Active : x.pol = "3of4" => x.cardSt = "confirmed"
 NoSplitBrain ==
   /\ \A c \in Clients : pc[c] = "committed" => Cer(cur[c]).status \in {"active", "revoked"}
   /\ \A c \in Clients : pc[c] \in {"staged", "cardOk", "ready"} => \E x \in cer : x.id = cur[c]
-  /\ \A k \in Keys : (idem[k].ok /\ idem[k].op = "commit") =>
-                       Cer(idem[k].cid).status \in {"active", "revoked"}
+  /\ \A r \in resps \cup {idem[k] : k \in LiveKeys} :
+       (r.ok /\ r.op = "commit") => Cer(r.cid).status \in {"active", "revoked"}
 
 \* Card loss never makes the active vault unrecoverable for its owner.
 Recoverable ==
