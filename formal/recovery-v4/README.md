@@ -64,12 +64,14 @@ card, a dead session's late request, a replayed answer, two sessions racing).
 
 ## Findings that bind step 6
 
-1. **Fresh master generation per ceremony.** If a new ceremony re-wraps the
-   same Master Key (`mutants/NoRotation.cfg`), the revoked 2-of-3 shares plus
-   an earlier copy of the sealed master still open the vault after an upgrade
-   to 3-of-4. Each ceremony therefore wraps a new master generation, the data
-   keys are re-wrapped under it while pending, and the commit swaps the
-   generation atomically.
+1. **Fresh master generation per ceremony.** With the same Master Key
+   re-wrapped (`mutants/NoRotation.cfg`) TLC finds two counterexamples:
+   from 3of4, merely *staging* a downgrade (3 steps, before the commit and
+   before its second step-up) lets 2 shares open the live vault; from 2of3,
+   after a committed upgrade (10 steps) the revoked 2-of-3 shares plus an
+   earlier copy of the sealed master still open it. Each ceremony therefore
+   wraps a new master generation, the data keys are re-wrapped under it while
+   pending, and the commit swaps the generation atomically.
 2. **Idempotency keys are required.** Without them a lost commit answer plus a
    retry reports "gone" for a commit that did happen
    (`mutants/NoIdempotency.cfg`).
