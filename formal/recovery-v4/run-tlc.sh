@@ -29,7 +29,7 @@ tlc() { # name cfg
   echo "$code"
 }
 
-stats() { grep -E "distinct states found|depth of the complete" "$1" | tr '\n' ' ' | sed 's/  */ /g'; }
+stats() { grep -E "distinct states found, 0 states left|depth of the complete" "$1" | tr '\n' ' ' | sed 's/  */ /g'; }
 
 expect_pass() { # name cfg
   local code; code="$(tlc "$1" "$2")"
@@ -65,8 +65,11 @@ for cfg in "$HERE"/mutants/*.cfg; do
 done
 
 echo "== Reachability witnesses (must be reached)" | tee -a "$SUMMARY"
+# TLC resolves a .cfg only below the spec's own directory.
+WDIR="$(mktemp -d "$HERE/.tlc-witness.XXXXXX")"
+trap 'rm -rf "$WDIR"' EXIT
 for w in $(grep -oE '^W_[A-Za-z0-9]+' "$SPEC"); do
-  cfg="$OUT/$w.cfg"
+  cfg="$WDIR/$w.cfg"
   sed -e '/^INVARIANTS/d' -e '/^PROPERTIES/d' "$HERE/RecoveryV4.cfg" > "$cfg"
   echo "INVARIANT $w" >> "$cfg"
   expect_violation "witness-$w" "$cfg" "$w"

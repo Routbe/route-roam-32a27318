@@ -181,6 +181,13 @@ WriteCard(c) ==
   /\ pc' = [pc EXCEPT ![c] = "cardOk"]
   /\ UNCHANGED <<dbVars, seen, cur, pol, nreq, outReq, msgs, resps, faults>>
 
+\* A buggy or hostile client skips the card step and asks to commit anyway;
+\* only the server's own check may stop it.
+SkipCard(c) ==
+  /\ pc[c] \in {"staged", "cardOk"}
+  /\ pc' = [pc EXCEPT ![c] = "ready"]
+  /\ UNCHANGED <<dbVars, cardHolds, seen, cur, pol, nreq, outReq, msgs, resps, faults>>
+
 \* The card leaves the field halfway: the NDEF record is torn.
 CardPulled(c) ==
   /\ pc[c] = "staged" /\ card = "linked" /\ faults < MaxFaults
@@ -419,7 +426,7 @@ Progress(c) ==
 
 Client(c) ==
   \/ StartBegin(c) \/ StartRemove(c) \/ StartAbortStale(c)
-  \/ Progress(c) \/ Retry(c) \/ Recv(c)
+  \/ Progress(c) \/ SkipCard(c) \/ Retry(c) \/ Recv(c)
 
 Fault ==
   \/ \E c \in Clients : CardPulled(c) \/ Crash(c)
