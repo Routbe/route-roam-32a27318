@@ -101,13 +101,13 @@ async function bridgeAs(identity: RoutIdentity, authId: string, memberId: string
       await sql`update public.users set last_sign_in_at = now() where id = ${row["id"] as string}`;
     }
   } else {
-    // Passkey-only registration: a first-time member row is created only for an
-    // identity that already owns a passkey (created by the passkey sign-up).
+    // A first-time member row is created only for an identity that already owns a
+    // passkey (passkey sign-up) or an OPAQUE password record (password sign-up, db-pending/0270).
     const passkeys = (await sql`
       select 1 from neon_auth.passkey where "userId"::text = ${authId} limit 1
     `) as Row[];
-    if (!passkeys.length) {
-      console.warn("[auth] refused member creation for an identity without a passkey");
+    if (!passkeys.length && !(await hasOpaquePassword(authId))) {
+      console.warn("[auth] refused member creation for an identity without a passkey or OPAQUE password");
       return null;
     }
     const metadata = {
@@ -134,6 +134,16 @@ async function bridgeAs(identity: RoutIdentity, authId: string, memberId: string
 
   if (!row) return null;
   return toSessionUser(row);
+}
+
+async function hasOpaquePassword(authId: string): Promise<boolean> {
+  try {
+    const { vaultPort } = await import("@/lib/vault/vault-port.server");
+    const port = vaultPort();
+    return (await port.pakeAvailable()) && (await port.pakeRegistered(authId));
+  } catch {
+    return false;
+  }
 }
 
 /** Full resolve: Better Auth session → the matching `public.users` record. */

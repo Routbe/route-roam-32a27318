@@ -237,7 +237,7 @@ begin
   select pg_catalog.count(*)::integer into v_global from vault_enclave.auth_pow_challenges c
    where c.issued_at > v_now - interval '60 seconds';
   -- Nobody is blocked: work only gets more expensive (about 65 thousand to 67 million hashes).
-  v_bits := pg_catalog.least(26, 16 + pg_catalog.least(v_fail, 6)
+  v_bits := least(26, 16 + least(v_fail, 6)
               + case when v_scope > 20 then 2 when v_scope > 5 then 1 else 0 end
               + case when v_global > 600 then 2 when v_global > 120 then 1 else 0 end);
   insert into vault_enclave.auth_pow_challenges (challenge, purpose, scope_digest, bits, issued_at, expires_at)

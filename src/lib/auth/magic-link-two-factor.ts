@@ -1,7 +1,8 @@
 /**
  * Better Auth plugin: second sign-in step for e-mail links + second-step options.
  *
- * The two-factor plugin only intercepts password sign-in. An e-mail link is a
+ * The two-factor plugin only intercepts its own password sign-in (switched off: plain
+ * passwords are refused). An e-mail link is a
  * first factor too, so for members with 2FA switched on this hook turns the
  * fresh session from `/magic-link/verify` back into a pending two-factor
  * challenge (same cookie + verification rows the two-factor plugin uses), and
@@ -46,6 +47,21 @@ type Ctx = {
   json: (body: unknown) => unknown;
 };
 
+/**
+ * Opens a pending two-factor challenge for `authUserId` (cookie + verification
+ * rows the two-factor plugin reads). No session exists until the second step.
+ * Used by e-mail links, social callbacks and OPAQUE password sign-in.
+ */
+export async function startSecondFactorChallenge(raw: unknown, authUserId: string): Promise<void> {
+  const ctx = raw as Ctx;
+  const cookie = ctx.context.createAuthCookie(TWO_FACTOR_COOKIE, { maxAge: CHALLENGE_MAX_AGE_S });
+  const identifier = `2fa-${generateRandomString(20)}`;
+  const expiresAt = new Date(Date.now() + CHALLENGE_MAX_AGE_S * 1000);
+  await ctx.context.internalAdapter.createVerificationValue({ value: authUserId, identifier, expiresAt });
+  await ctx.context.internalAdapter.createVerificationValue({ value: "0", identifier: `2fa-attempts-${identifier}`, expiresAt });
+  await ctx.setSignedCookie(cookie.name, identifier, ctx.context.secret, cookie.attributes);
+}
+
 export function magicLinkTwoFactor(options: Options) {
   const page = options.secondFactorPage ?? SECOND_FACTOR_PAGE;
   return {
@@ -62,12 +78,7 @@ export function magicLinkTwoFactor(options: Options) {
             deleteSessionCookie(raw as never, true);
             await ctx.context.internalAdapter.deleteSession(data.session.token);
             ctx.context.setNewSession(null);
-            const cookie = ctx.context.createAuthCookie(TWO_FACTOR_COOKIE, { maxAge: CHALLENGE_MAX_AGE_S });
-            const identifier = `2fa-${generateRandomString(20)}`;
-            const expiresAt = new Date(Date.now() + CHALLENGE_MAX_AGE_S * 1000);
-            await ctx.context.internalAdapter.createVerificationValue({ value: data.user.id, identifier, expiresAt });
-            await ctx.context.internalAdapter.createVerificationValue({ value: "0", identifier: `2fa-attempts-${identifier}`, expiresAt });
-            await ctx.setSignedCookie(cookie.name, identifier, ctx.context.secret, cookie.attributes);
+            await startSecondFactorChallenge(raw, data.user.id);
             throw ctx.redirect(page);
           }),
         },
