@@ -62,25 +62,26 @@ export function isPowBits(bits: unknown): bits is number {
 }
 
 /**
- * Finds a nonce. Checks `shouldStop` every 4096 attempts (abort before the
- * next batch, never mid-hash) and gives up after 2^(bits+6) attempts.
+ * Tries `count` consecutive nonces from `startAt`; returns the first that meets
+ * `bits`, or null. Callers loop over batches (the worker yields between them so
+ * an abort can arrive, H.1).
  */
-export function solvePow(
-  challenge: Uint8Array,
-  bits: number,
-  opts: { shouldStop?: () => boolean; startAt?: number; minBits?: number } = {},
-): Uint8Array {
-  const minBits = opts.minBits ?? POW_MIN_BITS;
-  if (!Number.isInteger(bits) || bits < minBits || bits > POW_MAX_BITS) throw new PowError("pow_invalid");
+export function searchPow(challenge: Uint8Array, bits: number, startAt: number, count: number): Uint8Array | null {
+  if (!Number.isInteger(bits) || bits < 1 || bits > POW_MAX_BITS) throw new PowError("pow_invalid");
   const buf = preimage(challenge);
   const view = new DataView(buf.buffer, LABEL.length + POW_CHALLENGE_BYTES, POW_NONCE_BYTES);
-  const limit = 2 ** (bits + 6);
-  let counter = opts.startAt ?? 0;
-  for (let tries = 0; tries < limit; tries++, counter++) {
-    if ((tries & 4095) === 0 && opts.shouldStop?.()) throw new PowError("pow_aborted");
+  for (let i = 0, counter = startAt; i < count; i++, counter++) {
     view.setUint32(0, counter >>> 0, true);
     view.setUint32(4, Math.floor(counter / 2 ** 32) >>> 0, true);
     if (leadingZeroBits(sha256(buf)) >= bits) return buf.slice(LABEL.length + POW_CHALLENGE_BYTES);
   }
-  throw new PowError("pow_exhausted");
+  return null;
+}
+
+/** Synchronous solver (tests, tools). Gives up after 2^(bits+6) attempts. */
+export function solvePow(challenge: Uint8Array, bits: number, minBits = POW_MIN_BITS): Uint8Array {
+  if (!Number.isInteger(bits) || bits < minBits || bits > POW_MAX_BITS) throw new PowError("pow_invalid");
+  const hit = searchPow(challenge, bits, 0, 2 ** (bits + 6));
+  if (!hit) throw new PowError("pow_exhausted");
+  return hit;
 }
