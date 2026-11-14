@@ -33,8 +33,6 @@ type Ctx = {
   json: (body: unknown) => unknown;
 };
 
-const NO_STORE = { "cache-control": "no-store" };
-
 async function fail(e: unknown): Promise<never> {
   const { OpaqueServerError } = await import("./opaque-server.server");
   if (e instanceof APIError) throw e;
@@ -111,8 +109,6 @@ export function opaquePasswordAuth() {
         }
         const user = authId ? await ctx.context.internalAdapter.findUserById(authId) : null;
         if (!user) throw new APIError("UNAUTHORIZED", { code: "invalid_credentials", message: "E-mailadres of wachtwoord klopt niet." });
-        const { isQuarantined } = await import("./quarantine-check.server");
-        if (await isQuarantined(user.id)) throw new APIError("UNAUTHORIZED", { code: "invalid_credentials", message: "E-mailadres of wachtwoord klopt niet." });
         if (user.twoFactorEnabled) {
           const { startSecondFactorChallenge } = await import("./magic-link-two-factor");
           await startSecondFactorChallenge(raw, user.id);
@@ -175,7 +171,7 @@ export function opaquePasswordAuth() {
           console.error("[opaque-signup] recording age failed", e instanceof Error ? e.message : e);
         }
         await openSession(raw, user);
-        return ctx.json({ ok: true, memberId: user.id }, { headers: NO_STORE } as never);
+        return ctx.json({ ok: true, memberId: user.id });
       }),
     },
   };
