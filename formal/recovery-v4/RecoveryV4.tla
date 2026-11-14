@@ -501,7 +501,7 @@ CardNeverDegrades == [][(card = "linked" /\ card' = "unlinked") => level' = leve
 
 \* (3)/(6) The active ceremony changes only by commit or an authorised remove.
 ActiveOnlyByCommit ==
-  [][Active' # Active => \E m \in msgs : m.op \in {"commit", "remove"} /\ m \notin msgs' /\ idem[Key(m)] = NoResp]_vars
+  [][Active' # Active => \E m \in msgs : m.op \in {"commit", "remove"} /\ m \notin msgs' /\ Unanswered(m)]_vars
 
 \* (3) Every pending ceremony ends: committed or safely rolled back.
 CeremonyTerminates ==
@@ -521,6 +521,6 @@ W_RolledBack  == ~\E x \in cer : x.status = "aborted"
 W_CardLost3of4 == ~(card = "unlinked" /\ level = "3of4")
 W_TornCard    == ~(cardHolds = -1 /\ Pending # {})
 W_LateRequest == ~\E m \in msgs : pc[m.c] # "wait" \/ m.n # nreq[m.c]
-W_Replayed    == ~\E r \in resps : pc[r.c] = "wait" /\ r.n = nreq[r.c] /\ outReq[r.c] \in msgs
+W_Replayed    == ~\E c \in Clients : pc[c] = "wait" /\ outReq[c] \in msgs /\ idem[<<c, nreq[c]>>] # NoResp
 W_Concurrent  == ~\E c, d \in Clients : c # d /\ pc[c] \in {"staged", "cardOk", "ready"} /\ pc[d] = "wait"
 =============================================================================
