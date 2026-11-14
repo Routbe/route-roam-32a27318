@@ -29,7 +29,7 @@ tlc() { # name cfg
   echo "$code"
 }
 
-stats() { grep -E "distinct states found, 0 states left|depth of the complete" "$1" | tr '\n' ' ' | sed 's/  */ /g'; }
+stats() { grep -E "^[0-9]+ states generated|depth of the complete" "$1" | tr '\n' ' ' | sed 's/  */ /g'; }
 
 expect_pass() { # name cfg
   local code; code="$(tlc "$1" "$2")"
