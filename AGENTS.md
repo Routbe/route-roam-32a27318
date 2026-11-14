@@ -79,6 +79,7 @@ use the editor.
 
 ## Migration history
 - Every row in public.schema_migrations must match a file in db/ or an entry in scripts/migration-history-allowlist.ts carrying Neon's exact checksum; check with scripts/migration-history-check.ts and never rewrite Neon's rows. Why: history drift stays visible without falsifying what actually ran.
+- A migration that redefines a CHECK constraint keeps every value earlier migrations and live functions write (grep db/ for the column), and its replay test exercises each of those writers afterwards. Why: 0267 once dropped 'activation' and would have broken every card activation.
 
 ## SECURITY DEFINER search_path
 - Every SECURITY DEFINER function runs with search_path = pg_catalog, pg_temp (from db/0258; 0255-0257 may still set the bare form during replay); the legacy list in scripts/security-definer-legacy.ts is empty and stays empty, both runners lint every migration from 0255 on by the rule in force at its number and run the guard in scripts/security-definer-policy.ts inside its transaction; `bun scripts/security-definer-check.ts` checks Neon. Why: nothing a caller can place on the path, including its temporary schema, may resolve inside owner-privileged code.
