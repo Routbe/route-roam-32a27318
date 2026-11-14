@@ -13,7 +13,7 @@ export const STEP_UP_REQUIRED = "STEP_UP_REQUIRED";
 export const STEP_UP_COOKIE = "rout_stepup";
 
 export type StepUpMethod = "passkey" | "totp" | "email" | "sms" | "backup" | "password" | "card";
-export type StepUpAction = "vault_export" | "account_delete" | "oauth_secret" | "workspace_role" | "account_merge" | "oauth_subject_type" | "primary_email_change" | "app_email_reassign" | "app_email_revoke" | "passkey_add" | "recovery_vault" | "card_reveal" | "card_lifecycle" | "card_scan" | "vault_token_read";
+export type StepUpAction = "vault_export" | "account_delete" | "oauth_secret" | "workspace_role" | "account_merge" | "oauth_subject_type" | "primary_email_change" | "app_email_reassign" | "app_email_revoke" | "passkey_add" | "recovery_vault" | "card_reveal" | "card_lifecycle" | "card_scan" | "vault_token_read" | "password_set";
 
 export type EnrolledFactors = { passkey: boolean; totp: boolean; sms?: boolean; backup?: boolean; password?: boolean; card?: boolean };
 
@@ -26,9 +26,13 @@ export const isCardStepUpAction = (action: StepUpAction | undefined) => !!action
  */
 export const CARD_SCAN_ACTION: StepUpAction = "card_scan";
 /** Proofs for these actions work once and only for the action they were given for. */
-export const SINGLE_USE_STEP_UP_ACTIONS: readonly StepUpAction[] = ["card_reveal", "card_lifecycle", "card_scan", "vault_token_read"];
+export const SINGLE_USE_STEP_UP_ACTIONS: readonly StepUpAction[] = ["card_reveal", "card_lifecycle", "card_scan", "vault_token_read", "password_set"];
 /** Opening a vault token (db/0221) needs a passkey, nothing else, spent once. */
 export const VAULT_READ_ACTION: StepUpAction = "vault_token_read";
+/** Setting, replacing or removing the OPAQUE password (db-pending/0270): passkey only, spent once in the vault. */
+export const PASSWORD_SET_ACTION: StepUpAction = "password_set";
+const PASSKEY_ONLY_ACTIONS: readonly StepUpAction[] = [VAULT_READ_ACTION, PASSWORD_SET_ACTION];
+export const isPasskeyOnlyStepUpAction = (action: StepUpAction | undefined) => !!action && PASSKEY_ONLY_ACTIONS.includes(action);
 export const isSingleUseStepUpAction = (action: StepUpAction | undefined) => !!action && SINGLE_USE_STEP_UP_ACTIONS.includes(action);
 
 /** A real second factor: passkey, authenticator app or a verified phone for SMS. */
@@ -38,7 +42,7 @@ export function hasSecondFactor(enrolled: EnrolledFactors): boolean {
 }
 
 export function allowedStepUpMethods(enrolled: EnrolledFactors, action?: StepUpAction): StepUpMethod[] {
-  if (action === VAULT_READ_ACTION) return enrolled.passkey ? ["passkey"] : [];
+  if (isPasskeyOnlyStepUpAction(action)) return enrolled.passkey ? ["passkey"] : [];
   if (action === CARD_SCAN_ACTION) {
     const scan: StepUpMethod[] = [];
     if (enrolled.passkey) scan.push("passkey");
@@ -66,7 +70,7 @@ export function allowedStepUpMethods(enrolled: EnrolledFactors, action?: StepUpA
 
 /** Which proofs a given action accepts; card-only methods never unlock other actions. */
 export function methodAcceptedFor(action: StepUpAction, method: StepUpMethod): boolean {
-  if (action === VAULT_READ_ACTION) return method === "passkey";
+  if (isPasskeyOnlyStepUpAction(action)) return method === "passkey";
   if (action === CARD_SCAN_ACTION) return method === "passkey" || method === "totp" || method === "sms";
   if (isCardStepUpAction(action)) return method !== "email";
   return method === "passkey" || method === "totp" || method === "email" || method === "card";
@@ -74,7 +78,7 @@ export function methodAcceptedFor(action: StepUpAction, method: StepUpMethod): b
 
 const STEP_UP_METHODS: readonly StepUpMethod[] = ["passkey", "totp", "email", "sms", "backup", "password", "card"];
 
-const ACTIONS: readonly StepUpAction[] = ["vault_export", "account_delete", "oauth_secret", "workspace_role", "account_merge", "oauth_subject_type", "primary_email_change", "app_email_reassign", "app_email_revoke", "passkey_add", "recovery_vault", "card_reveal", "card_lifecycle", "card_scan", "vault_token_read"];
+const ACTIONS: readonly StepUpAction[] = ["vault_export", "account_delete", "oauth_secret", "workspace_role", "account_merge", "oauth_subject_type", "primary_email_change", "app_email_reassign", "app_email_revoke", "passkey_add", "recovery_vault", "card_reveal", "card_lifecycle", "card_scan", "vault_token_read", "password_set"];
 const JTI = /^[A-Za-z0-9_-]{22}$/;
 
 /** 128-bit random proof id (22 base64url chars), so one proof can be spent exactly once. */
