@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { fc, test as fcTest } from "@fast-check/vitest";
+import fc from "fast-check";
 import { leadingZeroBits, powDigest, searchPow, solvePow, verifyPow } from "./hashcash";
 
 describe("Hashcash (rout.pow.v1)", () => {
@@ -10,14 +10,22 @@ describe("Hashcash (rout.pow.v1)", () => {
     expect(leadingZeroBits(new Uint8Array(4))).toBe(32);
   });
 
-  fcTest.prop([fc.uint8Array({ minLength: 32, maxLength: 32 })], { numRuns: 20 })("a solution verifies and a flipped bit does not cheat", (challenge) => {
-    const nonce = solvePow(challenge, 12, 1);
-    expect(verifyPow(challenge, nonce, 12)).toBe(true);
-    expect(leadingZeroBits(powDigest(challenge, nonce))).toBeGreaterThanOrEqual(12);
+  it("every solution verifies at its difficulty", () => {
+    fc.assert(
+      fc.property(fc.uint8Array({ minLength: 32, maxLength: 32 }), fc.integer({ min: 1, max: 12 }), (challenge, bits) => {
+        const nonce = solvePow(challenge, bits, 1);
+        return verifyPow(challenge, nonce, bits) && leadingZeroBits(powDigest(challenge, nonce)) >= bits;
+      }),
+      { numRuns: 30 },
+    );
+  });
+
+  it("the digest is bound to the challenge and the nonce", () => {
+    const challenge = new Uint8Array(32).fill(5);
+    const nonce = solvePow(challenge, 10, 1);
     const other = challenge.slice();
-    other[0] = (other[0] ?? 0) ^ 1;
-    // Bound to the challenge: the same nonce almost never meets 12 bits for another one.
-    expect(verifyPow(other, nonce, 12) && leadingZeroBits(powDigest(other, nonce)) < 12).toBe(false);
+    other[0] = 4;
+    expect(Buffer.from(powDigest(other, nonce)).equals(Buffer.from(powDigest(challenge, nonce)))).toBe(false);
   });
 
   it("rejects malformed inputs and the server floor", () => {
