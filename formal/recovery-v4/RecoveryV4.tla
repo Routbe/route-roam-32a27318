@@ -230,7 +230,7 @@ Recv(c) ==
           ELSE IF r.ok /\ r.op = "commit"
             THEN pc' = [pc EXCEPT ![c] = "committed"] /\ UNCHANGED cur
           ELSE pc' = [pc EXCEPT ![c] = "idle"] /\ cur' = [cur EXCEPT ![c] = 0]
-  /\ pol' = IF r.ok /\ r.op \in {"begin", "confirm", "commit"} THEN pol ELSE [pol EXCEPT ![c] = "none"]
+       /\ pol' = IF r.ok /\ r.op \in {"begin", "confirm", "commit"} THEN pol ELSE [pol EXCEPT ![c] = "none"]
   /\ outReq' = [outReq EXCEPT ![c] = NoReq]
   /\ UNCHANGED <<dbVars, cardHolds, nreq, msgs, faults>>
 
