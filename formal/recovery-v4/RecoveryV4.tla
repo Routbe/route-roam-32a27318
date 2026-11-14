@@ -107,7 +107,7 @@ Live(ms, p) == {Key(x) : x \in ms} \cup {<<c, nreq[c]>> : c \in {d \in Clients :
 Prune(t, ms, p) == [k \in Keys |-> IF k \in Live(ms, p) THEN t[k] ELSE NoResp]
 
 \* A request whose key has not been answered yet (or no idempotency at all).
-Fresh(m) == ~UseIdempotency \/ idem[Key(m)] = NoResp
+Unanswered(m) == ~UseIdempotency \/ idem[Key(m)] = NoResp
 
 Resp(m, ok, why, cid, v, l, p, a) ==
   [c |-> m.c, n |-> m.n, op |-> m.op, ok |-> ok, why |-> why, cid |-> cid,
@@ -275,7 +275,7 @@ Replay(m) ==
   /\ UNCHANGED <<cer, level, ver, gen, card, proofs, nextId>>
 
 SBegin(m) ==
-  /\ m.op = "begin" /\ Fresh(m)
+  /\ m.op = "begin" /\ Unanswered(m)
   /\ LET lvl  == IF UseCAS THEN level ELSE m.sl
          free == IF UseCAS THEN Pending = {} ELSE m.sp = 0
          why  == IF UseCAS /\ m.ev # ver THEN "conflict"
@@ -295,7 +295,7 @@ SBegin(m) ==
                 /\ UNCHANGED <<level, gen, card>>
 
 SConfirm(m) ==
-  /\ m.op = "confirm" /\ Fresh(m)
+  /\ m.op = "confirm" /\ Unanswered(m)
   /\ LET why == IF UseCAS /\ m.ev # ver THEN "conflict"
                 ELSE IF ~IsPend(m.cid) THEN "gone"
                 ELSE IF Cer(m.cid).pol # "3of4" THEN "invalid"
@@ -308,7 +308,7 @@ SConfirm(m) ==
              /\ UNCHANGED <<level, gen, card, proofs, nextId>>
 
 SCommit(m) ==
-  /\ m.op = "commit" /\ Fresh(m)
+  /\ m.op = "commit" /\ Unanswered(m)
   /\ LET lvl  == IF UseCAS THEN level ELSE m.sl
          why  == IF UseCAS /\ m.ev # ver THEN "conflict"
                  ELSE IF ~IsPend(m.cid) THEN "gone"
@@ -330,7 +330,7 @@ SCommit(m) ==
 
 \* Always allowed for the member; it never touches the active ceremony.
 SAbort(m) ==
-  /\ m.op = "abort" /\ Fresh(m)
+  /\ m.op = "abort" /\ Unanswered(m)
   /\ IF ~IsPend(m.cid) THEN Refuse(m, "gone")
      ELSE /\ cer' = {IF y.id = m.cid THEN [y EXCEPT !.status = "aborted"] ELSE y : y \in cer}
           /\ ver' = ver + 1
@@ -339,7 +339,7 @@ SAbort(m) ==
 
 \* Deleting the vault lowers the level to none, so it also needs a fresh step-up.
 SRemove(m) ==
-  /\ m.op = "remove" /\ Fresh(m)
+  /\ m.op = "remove" /\ Unanswered(m)
   /\ LET why == IF UseCAS /\ m.ev # ver THEN "conflict"
                 ELSE IF level = "none" THEN "invalid"
                 ELSE IF RequireDowngradeStepUp /\ ~Fresh(m.pf) THEN "stepup"
@@ -478,13 +478,19 @@ NoSplitBrain ==
   /\ \A r \in resps \cup {idem[k] : k \in Keys} :
        (r.ok /\ r.op = "commit") => Cer(r.cid).status \in {"active", "revoked"}
 
+\* (5)/(6) A session is never told "failed" for a commit that did happen
+\* (a lost answer plus a blind retry would otherwise hit "gone").
+NoFalseFailure ==
+  \A r \in resps : (r.op = "commit" /\ ~r.ok /\ r.cid # 0) =>
+                     ~(\E x \in cer : x.id = r.cid /\ x.status \in {"active", "revoked"})
+
 \* Card loss never makes the active vault unrecoverable for its owner.
 Recoverable ==
   \A x \in Active :
      Cardinality(F(x.pol) \ (IF card = "linked" /\ cardHolds = x.id THEN {} ELSE {"card"})) >= K(x.pol)
 
 Invariants == TypeOK /\ Exclusivity /\ LevelConsistent /\ StrictThreshold
-              /\ NoHalfOpen /\ NoSplitBrain /\ Recoverable
+              /\ NoHalfOpen /\ NoSplitBrain /\ NoFalseFailure /\ Recoverable
 
 \* (4) Any step that lowers the level consumes a fresh step-up proof in that same step.
 AuthorizedDowngrade ==
@@ -503,4 +509,18 @@ CeremonyTerminates ==
 
 \* (3) Every session comes back to rest (no livelock, no stuck UI).
 ClientsSettle == \A c \in Clients : (pc[c] # "idle") ~> (pc[c] = "idle")
+-----------------------------------------------------------------------------
+(* Reachability witnesses. Each is EXPECTED TO BE VIOLATED: TLC must find a *)
+(* behaviour that reaches the situation, which proves the safety checks    *)
+(* above are not vacuous (run-tlc.sh asserts every one is reached).        *)
+W_Upgrade     == ~\E x \in Active : x.kind = "upgrade"
+W_Downgrade   == ~\E x \in Active : x.kind = "downgrade"
+W_Rotate3of4  == ~\E x \in Active : x.kind = "rotate" /\ x.pol = "3of4"
+W_Removed     == ~(level = "none" /\ \E x \in cer : x.status = "revoked")
+W_RolledBack  == ~\E x \in cer : x.status = "aborted"
+W_CardLost3of4 == ~(card = "unlinked" /\ level = "3of4")
+W_TornCard    == ~(cardHolds = -1 /\ Pending # {})
+W_LateRequest == ~\E m \in msgs : pc[m.c] # "wait" \/ m.n # nreq[m.c]
+W_Replayed    == ~\E r \in resps : pc[r.c] = "wait" /\ r.n = nreq[r.c] /\ outReq[r.c] \in msgs
+W_Concurrent  == ~\E c, d \in Clients : c # d /\ pc[c] \in {"staged", "cardOk", "ready"} /\ pc[d] = "wait"
 =============================================================================
