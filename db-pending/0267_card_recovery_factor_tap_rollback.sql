@@ -1,5 +1,6 @@
 -- 0267 ROLLBACK — restores consume_sdm_tap and its purpose constraint exactly
--- as db/0245 + db/0258 left them (purposes public_proof and step_up only).
+-- as db/0245, db/0246 and db/0258 left them (purposes public_proof, step_up
+-- and activation; no recovery_factor).
 --
 -- NOT a migration: the runners never replay it (it is not in db/). Run it only
 -- after the owner's separate GO, in one transaction. It does not touch
@@ -18,7 +19,7 @@ end $$;
 
 alter table vault_enclave.sdm_tap_grants drop constraint if exists sdm_tap_grants_purpose;
 alter table vault_enclave.sdm_tap_grants add constraint sdm_tap_grants_purpose
-  check (consumed_for is null or consumed_for in ('public_proof', 'step_up'));
+  check (consumed_for is null or consumed_for in ('public_proof', 'step_up', 'activation'));
 
 -- Body verbatim from db/0245; search_path as set by db/0258.
 create or replace function vault_enclave.consume_sdm_tap(p_tap_ref text, p_purpose text)
@@ -63,6 +64,10 @@ begin
   end if;
   if not has_function_privilege('rout_app', 'vault_enclave.consume_sdm_tap(text, text)', 'execute') then
     raise exception '0267 rollback: rout_app lost EXECUTE on consume_sdm_tap';
+  end if;
+  if pg_catalog.pg_get_constraintdef((select oid from pg_catalog.pg_constraint where conname = 'sdm_tap_grants_purpose'
+        and conrelid = 'vault_enclave.sdm_tap_grants'::regclass)) !~ 'activation' then
+    raise exception '0267 rollback: sdm_tap_grants_purpose must keep activation';
   end if;
   if has_table_privilege('rout_app', 'vault_enclave.sdm_tap_grants', 'select, insert, update, delete')
      or has_table_privilege('rout_app', 'vault_enclave.sdm_batch_cards', 'select, insert, update, delete') then
