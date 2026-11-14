@@ -105,6 +105,3 @@ use the editor.
 
 ## Booking phases B–G
 - Phase B–G security rules live in src/lib/booking-engine/AGENTS.md and bind every booking, recovery and crypto change. Why: the owner's hard requirements stay in one scoped place.
-
-## Formal recovery model
-- Recovery state changes follow formal/recovery-v4/RecoveryV4.tla: a change to recovery SQL or flow updates the model first and keeps `formal/recovery-v4/run-tlc.sh` green (main models hold, every mutant breaks, every witness is reached), which CI runs via .github/workflows/tla-recovery-v4.yml with a SHA-256-pinned tla2tools.jar. Why: the SQL implements the checked transitions, and the mutants keep the proof from turning vacuous.
