@@ -46,7 +46,7 @@ describe("0270 OPAQUE + PoW on a replay of db/", () => {
     }
   };
   const port = new LocalPostgresVaultAdapter(exec);
-  const deps: OpaqueDeps = { port, kek: deriveVaultKek("test-master-kek-0270-".padEnd(48, "x")) };
+  const deps: OpaqueDeps = { port, kek: deriveVaultKek("a".repeat(64)) };
   const apply = (sql: string) => db.exec(`begin;\n${sql}\n;commit;`);
   const solve = (c: PowWire) => ({ id: c.id, nonce: b64u(solvePow(fromB64u(c.challenge, 32), c.bits)) });
   const proof = async () => {
