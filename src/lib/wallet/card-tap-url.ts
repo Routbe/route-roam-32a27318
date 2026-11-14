@@ -161,7 +161,7 @@ export async function scanCardTaps(signal: AbortSignal, onTap: (tap: CardTapPara
  * started elsewhere (for example from a stolen session).
  */
 export type CardTapPurpose = "proof" | "step_up" | "recovery_factor";
-/** recovery_factor: "this is my own card" before a recovery shard is sealed to it (db-pending/0267); signed-in only. */
+/** recovery_factor: "this is my own card" before a recovery shard is sealed to it (db/0267); signed-in only. */
 export function cardTapRoute(purpose: CardTapPurpose, signedIn: boolean): "step_up" | "recovery_factor" | "proof" | "refuse" {
   if (purpose === "step_up") return signedIn ? "step_up" : "refuse";
   if (purpose === "recovery_factor") return signedIn ? "recovery_factor" : "refuse";

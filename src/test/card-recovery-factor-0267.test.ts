@@ -1,8 +1,8 @@
 // @vitest-environment node
 /**
- * db-pending/0267 (recovery_factor card tap), its rollback and the strict
- * consumeSdmTap() wrapper (H.6). Replays db/ on PGlite, then 0267 -> rollback
- * -> 0267 again, and runs consume_sdm_tap as rout_app with a real caller.
+ * db/0267 (recovery_factor card tap, live on Neon 2026-11-14), its rollback and
+ * the strict consumeSdmTap() wrapper (H.6). Replays db/ up to 0266 on PGlite,
+ * then 0267 -> rollback -> 0267 again, and runs consume_sdm_tap as rout_app with a real caller.
  */
 import { PGlite } from "@electric-sql/pglite";
 import { createHash, randomBytes } from "node:crypto";
@@ -14,7 +14,8 @@ import { consumeSdmTap, parseSdmTapRow, TapDenied } from "@/lib/vault/sdm-tap-co
 import { LocalPostgresVaultAdapter, type TapGrant, type VaultSqlExecutor } from "@/lib/vault/vault-port.server";
 
 const ROOT = join(__dirname, "..", "..");
-const SQL_0267 = readFileSync(join(ROOT, "db-pending", "0267_card_recovery_factor_tap.sql"), "utf8");
+const FILE_0267 = "0267_card_recovery_factor_tap.sql";
+const SQL_0267 = readFileSync(join(ROOT, "db", FILE_0267), "utf8");
 const SQL_ROLLBACK = readFileSync(join(ROOT, "db-pending", "0267_card_recovery_factor_tap_rollback.sql"), "utf8");
 const OWNER = "00000000-0000-4000-8000-0000000000c1";
 const OTHER = "00000000-0000-4000-8000-0000000000c2";
@@ -55,7 +56,7 @@ describe("parseSdmTapRow / consumeSdmTap (unit)", () => {
   });
 });
 
-describe("0267 + rollback on a replay of db/", () => {
+describe("0267 + rollback on a replay of db/ before 0267", () => {
   let db: PGlite;
   const exec: VaultSqlExecutor = async (userId, query, params) => {
     await db.exec("begin");
@@ -86,7 +87,7 @@ describe("0267 + rollback on a replay of db/", () => {
     db = await PGlite.create({ extensions: { pgcrypto, btree_gist } });
     const dir = join(ROOT, "db");
     for (const step of planMigrations(listMigrationFiles(dir), new Set())) {
-      if (step.action === "run") await db.exec(`begin;\n${readFileSync(join(dir, step.file), "utf8")}\n;commit;`);
+      if (step.action === "run" && step.file !== FILE_0267) await db.exec(`begin;\n${readFileSync(join(dir, step.file), "utf8")}\n;commit;`);
     }
     await db.query("insert into public.users (id, email) values ($1, 'owner@example.test'), ($2, 'other@example.test')", [OWNER, OTHER]);
     // One owned card; foreign keys to fleet/batch rows are not under test here.
