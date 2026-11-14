@@ -24,7 +24,7 @@
 (* A transaction interrupted by a dropped connection simply never happened *)
 (* (atomicity), so only drops BETWEEN transactions need modelling.         *)
 (*                                                                         *)
-(* The four boolean constants switch individual protections off. The main *)
+(* The five boolean constants switch individual protections off. The main *)
 (* models run with all of them TRUE; each mutant model switches one off    *)
 (* and TLC must then find a counterexample (see run-tlc.sh), which proves  *)
 (* that every invariant really guards something.                           *)
@@ -39,12 +39,13 @@ CONSTANTS Clients,               \* sessions/devices of the SAME member
           UseCAS,                \* FOR UPDATE + version CAS inside each transaction
           RotateGen,             \* every ceremony wraps a fresh master generation
           RequireDowngradeStepUp,\* commit that lowers the level consumes a fresh step-up
-          RequireCardConfirm     \* a 3of4 commit needs the card tap proof
+          RequireCardConfirm,    \* a 3of4 commit needs the card tap proof
+          UseIdempotency         \* a repeated idempotency key replays the stored answer
 
 ASSUME /\ Clients # {}
        /\ MaxCeremonies \in Nat \ {0} /\ MaxReq \in Nat \ {0}
        /\ MaxStepUps \in Nat /\ MaxFaults \in Nat
-       /\ {UseCAS, RotateGen, RequireDowngradeStepUp, RequireCardConfirm} \subseteq BOOLEAN
+       /\ {UseCAS, RotateGen, RequireDowngradeStepUp, RequireCardConfirm, UseIdempotency} \subseteq BOOLEAN
 
 Factors == {"prf", "server", "paper", "card"}
 Pols    == {"2of3", "3of4"}
@@ -104,6 +105,9 @@ Consume(p) == IF Fresh(p) THEN [proofs EXCEPT ![p] = "used"] ELSE proofs
 \* database such rows age out). This keeps the state space canonical.
 Live(ms, p) == {Key(x) : x \in ms} \cup {<<c, nreq[c]>> : c \in {d \in Clients : p[d] = "wait"}}
 Prune(t, ms, p) == [k \in Keys |-> IF k \in Live(ms, p) THEN t[k] ELSE NoResp]
+
+\* A request whose key has not been answered yet (or no idempotency at all).
+Fresh(m) == ~UseIdempotency \/ idem[Key(m)] = NoResp
 
 Resp(m, ok, why, cid, v, l, p, a) ==
   [c |-> m.c, n |-> m.n, op |-> m.op, ok |-> ok, why |-> why, cid |-> cid,
@@ -259,19 +263,19 @@ Answer(m, r) ==
   /\ msgs' = msgs \ {m}
 
 Refuse(m, why) ==
-  /\ Answer(m, Resp(m, FALSE, why, 0, ver, level, IdOf(Pending), IdOf(Active)))
+  /\ Answer(m, Resp(m, FALSE, why, m.cid, ver, level, IdOf(Pending), IdOf(Active)))
   /\ UNCHANGED <<cer, level, ver, gen, card, proofs, nextId>>
 
 \* A key already answered returns the stored answer and changes nothing.
 Replay(m) ==
-  /\ idem[Key(m)] # NoResp
+  /\ UseIdempotency /\ idem[Key(m)] # NoResp
   /\ resps' = resps \cup {idem[Key(m)]}
   /\ msgs' = msgs \ {m}
   /\ idem' = Prune(idem, msgs \ {m}, pc)
   /\ UNCHANGED <<cer, level, ver, gen, card, proofs, nextId>>
 
 SBegin(m) ==
-  /\ m.op = "begin" /\ idem[Key(m)] = NoResp
+  /\ m.op = "begin" /\ Fresh(m)
   /\ LET lvl  == IF UseCAS THEN level ELSE m.sl
          free == IF UseCAS THEN Pending = {} ELSE m.sp = 0
          why  == IF UseCAS /\ m.ev # ver THEN "conflict"
@@ -291,7 +295,7 @@ SBegin(m) ==
                 /\ UNCHANGED <<level, gen, card>>
 
 SConfirm(m) ==
-  /\ m.op = "confirm" /\ idem[Key(m)] = NoResp
+  /\ m.op = "confirm" /\ Fresh(m)
   /\ LET why == IF UseCAS /\ m.ev # ver THEN "conflict"
                 ELSE IF ~IsPend(m.cid) THEN "gone"
                 ELSE IF Cer(m.cid).pol # "3of4" THEN "invalid"
@@ -304,7 +308,7 @@ SConfirm(m) ==
              /\ UNCHANGED <<level, gen, card, proofs, nextId>>
 
 SCommit(m) ==
-  /\ m.op = "commit" /\ idem[Key(m)] = NoResp
+  /\ m.op = "commit" /\ Fresh(m)
   /\ LET lvl  == IF UseCAS THEN level ELSE m.sl
          why  == IF UseCAS /\ m.ev # ver THEN "conflict"
                  ELSE IF ~IsPend(m.cid) THEN "gone"
@@ -326,7 +330,7 @@ SCommit(m) ==
 
 \* Always allowed for the member; it never touches the active ceremony.
 SAbort(m) ==
-  /\ m.op = "abort" /\ idem[Key(m)] = NoResp
+  /\ m.op = "abort" /\ Fresh(m)
   /\ IF ~IsPend(m.cid) THEN Refuse(m, "gone")
      ELSE /\ cer' = {IF y.id = m.cid THEN [y EXCEPT !.status = "aborted"] ELSE y : y \in cer}
           /\ ver' = ver + 1
@@ -335,7 +339,7 @@ SAbort(m) ==
 
 \* Deleting the vault lowers the level to none, so it also needs a fresh step-up.
 SRemove(m) ==
-  /\ m.op = "remove" /\ idem[Key(m)] = NoResp
+  /\ m.op = "remove" /\ Fresh(m)
   /\ LET why == IF UseCAS /\ m.ev # ver THEN "conflict"
                 ELSE IF level = "none" THEN "invalid"
                 ELSE IF RequireDowngradeStepUp /\ ~Fresh(m.pf) THEN "stepup"
