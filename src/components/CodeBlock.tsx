@@ -68,13 +68,13 @@ export function CodeBlock({
 
   return (
     <div className={cn("group relative overflow-hidden rounded-xl bg-neutral-900", className)}>
-      <div className="flex items-center justify-between rounded-t-xl border-b border-neutral-700/50 bg-neutral-800/80 px-4 py-2 text-[11px] font-mono text-neutral-400">
+      <div className="flex items-center justify-between rounded-t-xl border-b border-neutral-700/50 bg-neutral-800/80 px-4 py-2 text-[11px] font-mono text-neutral-300">
         <span className="uppercase tracking-widest">{language}</span>
         <button
           type="button"
           onClick={copy}
           aria-label="Copy code"
-          className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-[11px] text-neutral-400 transition-colors hover:bg-white/10 hover:text-neutral-100"
+          className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-[11px] text-neutral-300 transition-colors hover:bg-white/10 hover:text-neutral-100"
         >
           {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
           {copied ? copiedLabel : copyLabel}
