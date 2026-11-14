@@ -8,7 +8,7 @@
  *     secret to this tab over a BroadcastChannel (card-handoff.ts).
  *
  * Setup only seals a shard to a card the server confirmed as the member's own
- * (purpose recovery_factor, db-pending/0267): over Web NFC this tab asks
+ * (purpose recovery_factor, db/0267): over Web NFC this tab asks
  * `confirmOwnTap`, over the hand-off /t asks before it delivers. Restore and
  * sign-in need no such check: a wrong card simply does not open its shard.
  *

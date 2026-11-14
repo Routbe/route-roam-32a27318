@@ -126,7 +126,7 @@
 - [ ] BBS+ (BLS12-381) blinde credentials + zero-knowledge-bewijs bij aankomst; server bewaart alleen een nullifier per tijdslot
 - [x] Besluit eigenaar: herstel 3-van-4 (vervangt 2-van-4 uit bijlage O)
 - [x] Fase B: recovery-mpc versie 3 (drempel 3 van 4), werker, server, /t-doorgifte, schermen; modelcontrole 16 deelverzamelingen + fast-check
-- [ ] GO eigenaar: db-pending/0267 (kaarttik "dit is mijn kaart") op Neon — nodig om een kluis in te stellen
+- [x] GO eigenaar: 0267 (kaarttik "dit is mijn kaart") live op Neon 2026-11-14 12:12 UTC, in db/
 - [ ] GO eigenaar: db-pending/0268 (opslag 3-van-4) op Neon — tot dan weigert de app elke nieuwe kluis
 - [ ] Na deploy met niveau ≥ 0268: db-pending/0269 (oude 2-van-3/2-van-4-opslag weg, alleen versie 3) — GO eigenaar
 - [ ] Doorkliktest 3-van-4 op echte telefoon met een kaart mét #rk1-fragment
@@ -137,7 +137,7 @@
 - [x] 0267 + rollback gecorrigeerd: doel 'activation' (db/0246) bleef weg → elke kaartactivatie zou falen; nu behouden + bewaking in het DO-blok + test die activatie na 0267 en na rollback doet
 - [x] Testsuite: 3 bestanden faalden op het laden van een font-bestand (`?url`) buiten de projectmap; vitest-config staat de echte node_modules-map toe
 - [x] Alleen-lezen controles 0267 op Neon (geen tap-rijen, constraint met activation, functie = db/0245+0258, rechten in orde, 0267 nog niet toegepast)
-- [ ] GO eigenaar: db-pending/0267 op Neon
+- [x] 0267 toegepast (één transactie), checksum/rechten/constraint nagekeken, CODE_SCHEMA_LEVEL 0267
 - [ ] Stap 2: TLA+-model herstel v4 (staten, gelijktijdigheid, stateless stappen) + TLC in CI
 - [ ] Stap 3: OPAQUE + Argon2id (Wasm, vast geheugen) + Hashcash-PoW; migratie in db-pending/
 - [ ] Stap 4: Veiligheidsschild (3 niveaus) in topbalk, NL/EN/FR/DE

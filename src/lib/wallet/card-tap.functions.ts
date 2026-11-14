@@ -38,7 +38,7 @@ export const verifyCardTapFn = createServerFn({ method: "POST" })
     if (route === "refuse") return { status: data.purpose === "recovery_factor" ? "card_denied" : "step_up_denied" };
     const tap = { p: data.p, m: data.m };
     if (route === "recovery_factor" && context.userId) {
-      // False for every denial, including a database without db-pending/0267 (fail closed).
+      // False for every denial, including a database without db/0267 (fail closed).
       const { confirmOwnCardTap } = await import("@/lib/vault/sdm-tap.server");
       return { status: (await confirmOwnCardTap(context.userId, tap)) ? "card_confirmed" : "card_denied" };
     }
