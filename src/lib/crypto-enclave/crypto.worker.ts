@@ -8,12 +8,24 @@
 import { isEnclaveOp, runEnclaveOp } from "./enclave-core";
 import type { EnclaveRequest, EnclaveResponse } from "./protocol";
 import { createEnclaveDispatcher } from "./dispatch";
+import { requestAbort } from "./operation-control";
+import { wipeEngineMemory } from "./opaque-engine";
 
 declare const self: DedicatedWorkerGlobalScope;
 
 // Ordered execution prevents identity creation, key activation and locking
 // from overtaking each other across asynchronous Web Crypto operations.
 const dispatch = createEnclaveDispatcher(isEnclaveOp, runEnclaveOp, (response: EnclaveResponse, transfer) => self.postMessage(response, transfer));
-self.onmessage = (event: MessageEvent<EnclaveRequest>) => {
-  void dispatch(event.data);
+self.onmessage = (event: MessageEvent<EnclaveRequest | { control: "abort"; id: number }>) => {
+  const data = event.data as unknown;
+  // Control messages bypass the ordered queue so a running operation can stop between steps (H.1).
+  if (data && typeof data === "object" && (data as { control?: unknown }).control === "abort") {
+    requestAbort((data as { id?: unknown }).id);
+    return;
+  }
+  void dispatch(data);
 };
+// Teardown: zero-fill every engine memory that is still alive before the worker goes.
+self.addEventListener("close", () => {
+  wipeEngineMemory();
+});
