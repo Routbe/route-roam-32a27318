@@ -1,5 +1,5 @@
 -- 0267 — EXPAND: a live ROUT Card tap can confirm "this is my own card" for the
--- recovery vault (2-of-4, db/0266), without completing any step-up.
+-- recovery vault (3-of-4, db/0266 + db-pending/0268), without completing any step-up.
 --
 -- Why: before the browser seals a recovery shard to a card's fragment secret
 -- (src/lib/crypto-enclave/card-factor.ts), the tap that carried that fragment
@@ -11,9 +11,11 @@
 -- grant, same owner rule as 'step_up' (caller from the transaction context,
 -- never a parameter), its own audit reason. Signature, owner and rights stay.
 
+-- Keeps 'activation' (db/0246, spent by activate_member_card): dropping it
+-- would make every card activation fail on this constraint.
 alter table vault_enclave.sdm_tap_grants drop constraint if exists sdm_tap_grants_purpose;
 alter table vault_enclave.sdm_tap_grants add constraint sdm_tap_grants_purpose
-  check (consumed_for is null or consumed_for in ('public_proof', 'step_up', 'recovery_factor'));
+  check (consumed_for is null or consumed_for in ('public_proof', 'step_up', 'activation', 'recovery_factor'));
 
 -- Spends a tap_ grant once, for one purpose. public_proof needs no session and
 -- reveals only whether the card is activated; step_up and recovery_factor only
@@ -60,6 +62,10 @@ do $$
 begin
   if has_function_privilege('public', 'vault_enclave.consume_sdm_tap(text, text)', 'execute') then
     raise exception '0267: PUBLIC must not execute consume_sdm_tap';
+  end if;
+  if pg_catalog.pg_get_constraintdef((select oid from pg_catalog.pg_constraint where conname = 'sdm_tap_grants_purpose'
+        and conrelid = 'vault_enclave.sdm_tap_grants'::regclass)) !~ 'activation' then
+    raise exception '0267: sdm_tap_grants_purpose must keep activation';
   end if;
   if has_table_privilege('rout_app', 'vault_enclave.sdm_tap_grants', 'select, insert, update, delete')
      or has_table_privilege('rout_app', 'vault_enclave.sdm_batch_cards', 'select, insert, update, delete') then

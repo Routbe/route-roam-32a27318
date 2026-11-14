@@ -3,6 +3,7 @@ import { createFileRoute, notFound } from "@tanstack/react-router";
 
 import AuthNeon from "@/components/imported-pages/AuthNeon";
 import { isAdminMode } from "@/lib/app-mode";
+import { getAuthProviders } from "@/lib/auth-providers.functions";
 
 /**
  * `/auth/sign-in` (passkey, e-maillink of wachtwoord + tweede stap),
@@ -26,14 +27,17 @@ export const Route = createFileRoute("/auth/$authView")({
       { name: "twitter:card", content: "summary" },
     ],
   }),
+  // Providers and readiness come with the first render, so nothing is inserted above the form later.
+  loader: () => getAuthProviders().catch(() => null),
   component: AuthPage,
 });
 
 function AuthPage() {
   const { authView } = Route.useParams();
-  if (authView === "sign-in") return <AuthNeon initialMode="signin" />;
-  if (authView === "recovery") return <AuthNeon initialMode="recovery" />;
-  if (authView === "reset-password") return <AuthNeon initialMode="reset" />;
-  if (authView === "sign-up") return <AuthNeon initialMode="signup" />;
+  const info = Route.useLoaderData();
+  if (authView === "sign-in") return <AuthNeon initialMode="signin" initialProviders={info} />;
+  if (authView === "recovery") return <AuthNeon initialMode="recovery" initialProviders={info} />;
+  if (authView === "reset-password") return <AuthNeon initialMode="reset" initialProviders={info} />;
+  if (authView === "sign-up") return <AuthNeon initialMode="signup" initialProviders={info} />;
   throw notFound();
 }
