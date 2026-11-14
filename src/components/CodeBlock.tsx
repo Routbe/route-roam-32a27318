@@ -53,7 +53,7 @@ export function CodeBlock({
               copy();
             }}
             aria-label="Copy code"
-            className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-[11px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            className="tap-target -my-3 inline-flex items-center justify-center gap-1.5 rounded-md px-2 py-1 text-[11px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
           >
             {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
             {copied ? copiedLabel : copyLabel}
@@ -74,7 +74,7 @@ export function CodeBlock({
           type="button"
           onClick={copy}
           aria-label="Copy code"
-          className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-[11px] text-neutral-300 transition-colors hover:bg-white/10 hover:text-neutral-100"
+          className="tap-target -my-3 inline-flex items-center justify-center gap-1.5 rounded-md px-2 py-1 text-[11px] text-neutral-300 transition-colors hover:bg-white/10 hover:text-neutral-100"
         >
           {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
           {copied ? copiedLabel : copyLabel}
