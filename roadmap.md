@@ -131,3 +131,19 @@
 - [ ] Na deploy met niveau ≥ 0268: db-pending/0269 (oude 2-van-3/2-van-4-opslag weg, alleen versie 3) — GO eigenaar
 - [ ] Doorkliktest 3-van-4 op echte telefoon met een kaart mét #rk1-fragment
 - [x] Besluit eigenaar: pseudoniem per host — limieten per host, niet te volgen tussen hosts, mail via kluisverwijzing
+
+## Ronde J (plan 2026-11-14, GO plan)
+- [x] Bindende regels F, H en I in src/lib/booking-engine/AGENTS.md
+- [x] 0267 + rollback gecorrigeerd: doel 'activation' (db/0246) bleef weg → elke kaartactivatie zou falen; nu behouden + bewaking in het DO-blok + test die activatie na 0267 en na rollback doet
+- [x] Testsuite: 3 bestanden faalden op het laden van een font-bestand (`?url`) buiten de projectmap; vitest-config staat de echte node_modules-map toe
+- [x] Alleen-lezen controles 0267 op Neon (geen tap-rijen, constraint met activation, functie = db/0245+0258, rechten in orde, 0267 nog niet toegepast)
+- [ ] GO eigenaar: db-pending/0267 op Neon
+- [ ] Stap 2: TLA+-model herstel v4 (staten, gelijktijdigheid, stateless stappen) + TLC in CI
+- [ ] Stap 3: OPAQUE + Argon2id (Wasm, vast geheugen) + Hashcash-PoW; migratie in db-pending/
+- [ ] Stap 4: Veiligheidsschild (3 niveaus) in topbalk, NL/EN/FR/DE
+- [ ] Stap 5: FIDO MDS3-attestatie (gesigneerde lijst, periodiek ophalen)
+- [ ] Stap 6: herstel v4 (2-van-3 zonder kaart, 3-van-4 met kaart); 0268/0269 herschrijven
+- [ ] Stap 7: gasten zonder spoor (pseudoniem per epoch, BBS+, blinde buckets, ZK-range op commitment)
+- [ ] Stap 8: hybride PQ-ratchet + RVE2
+- [ ] Stap 9: RLS non-interference-model (Z3/Lean) vergeleken met de snapshot in CI
+- [ ] /secure/*-documenten met COOP/COEP; Wasm SRI (SHA-384) en reproduceerbare builds
