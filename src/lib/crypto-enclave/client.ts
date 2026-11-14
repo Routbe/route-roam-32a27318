@@ -3,7 +3,7 @@
  * posts typed messages to crypto.worker.ts and resolves the replies. There is
  * deliberately no main-thread fallback — without a worker, crypto refuses.
  */
-import type { EnclaveArgs, EnclaveErrorCode, EnclaveOp, EnclaveRequest, EnclaveResponse, EnclaveResult, LedgerDraft, SealedForUser, VaultSummary } from "./protocol";
+import type { EnclaveArgs, EnclaveErrorCode, EnclaveOp, EnclaveRequest, EnclaveResponse, EnclaveResult, LedgerDraft, PasswordSource, SealedForUser, VaultSummary } from "./protocol";
 import type { PrivateEnvelope } from "@/lib/ledger/crypto";
 import type { Capability, CapabilityGrant } from "@/lib/protocol/capabilities";
 import type { EventDraft, SignedEvent } from "@/lib/protocol/events";
@@ -111,7 +111,7 @@ function getWorker(): Worker {
 
 export function callEnclave<K extends EnclaveOp>(op: K, args: EnclaveArgs<K>, transfer: Transferable[] = []): Promise<EnclaveResult<K>> {
   // Disposal must never recreate a worker after a crash, timeout or logout.
-  if (!worker && (op === "vault.discard" || op === "masterKey.discardPending" || op === "ledger.discardPending" || op === "ledger.lock")) {
+  if (!worker && (op === "vault.discard" || op === "masterKey.discardPending" || op === "ledger.discardPending" || op === "ledger.lock" || op === "password.close" || op === "opaque.discard" || op === "secure.wipe")) {
     return Promise.resolve(null as EnclaveResult<K>);
   }
   return new Promise<EnclaveResult<K>>((resolve, reject) => {
@@ -250,4 +250,47 @@ export const enclave = {
     dpop: async (userId: string, method: string, url: string) => (await callEnclave("protocol.dpop", { userId, method, url })).proof,
     delegate: (userId: string, grant: CapabilityGrant, parent?: Capability | null) => callEnclave("protocol.delegate", { userId, grant, parent: parent ?? null }),
   },
+  /** Paranoid password input: key bytes stream into a fixed Wasm memory in the worker. */
+  password: {
+    open: () => callEnclave("password.open", {}),
+    /** One key's character; the bytes are transferred and wiped. */
+    key: (slot: string, character: string) => {
+      const key = new TextEncoder().encode(character);
+      return callEnclave("password.key", { slot, key }, moved(key));
+    },
+    backspace: (slot: string) => callEnclave("password.backspace", { slot }),
+    clear: (slot: string) => callEnclave("password.clear", { slot }),
+    close: (slot: string) => callEnclave("password.close", { slot }),
+  },
+  pow: {
+    /** The challenge is transferred. Abortable with abortRunningEnclaveOperation(). */
+    solve: (challenge: Uint8Array, bits: number) => callEnclave("pow.solve", { challenge, bits }, moved(challenge)),
+  },
+  opaque: {
+    /** A typed password's bytes (from the normal field) are transferred; clear the field right after. */
+    registerStart: (password: PasswordSource) => callEnclave("opaque.registerStart", { password }, "bytes" in password ? moved(password.bytes) : []),
+    registerFinish: (handle: string, response: Uint8Array) => callEnclave("opaque.registerFinish", { handle, response }, moved(response)),
+    loginStart: (password: PasswordSource) => callEnclave("opaque.loginStart", { password }, "bytes" in password ? moved(password.bytes) : []),
+    loginFinish: (handle: string, ke2: Uint8Array) => callEnclave("opaque.loginFinish", { handle, ke2 }, moved(ke2)),
+    commit: (handle: string, userId: string) => callEnclave("opaque.commit", { handle, userId }),
+    discard: (handle: string) => callEnclave("opaque.discard", { handle }),
+    vaultKey: (userId: string) => callEnclave("opaque.vaultKey", { userId }),
+  },
+  secure: {
+    /** Runs when the worker is idle (queued); wipes all password state and engine memory. */
+    wipe: () => callEnclave("secure.wipe", {}),
+  },
 };
+
+/**
+ * Asks the operation the worker is running to stop at its next safe point
+ * (between proof-of-work batches, before Argon2id). It then fails with
+ * `aborted` and wipes; never mid-instruction (H.1).
+ */
+export function abortRunningEnclaveOperation(): void {
+  const w = worker;
+  if (!w) return;
+  for (const [id, waiter] of waiting) {
+    if (waiter.owner === w && waiter.started) w.postMessage({ control: "abort", id });
+  }
+}
