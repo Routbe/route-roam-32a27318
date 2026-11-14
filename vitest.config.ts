@@ -1,7 +1,7 @@
 import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
 import path from "node:path";
-import { readdirSync, readFileSync } from "node:fs";
+import { readdirSync, readFileSync, realpathSync } from "node:fs";
 import mdx from "@mdx-js/rollup";
 import remarkFrontmatter from "remark-frontmatter";
 import remarkMdxFrontmatter from "remark-mdx-frontmatter";
@@ -33,4 +33,7 @@ export default defineConfig({
   resolve: {
     alias: { "@": path.resolve(__dirname, "./src") },
   },
+  // `?url` imports (fonts in __root.tsx) are served through Vite's fs guard; when
+  // node_modules is a symlink outside the project, its real path must be allowed.
+  server: { fs: { allow: [__dirname, realpathSync(path.resolve(__dirname, "node_modules"))] } },
 });
