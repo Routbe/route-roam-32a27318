@@ -305,13 +305,12 @@ export async function registerStart(
   });
 }
 
-/** Validates the upload and stores the record for the member or the fresh sign-up identity. */
-export async function registerFinish(input: { email: string; upload: unknown }, who: RegistrationKind, deps: OpaqueDeps = {}): Promise<void> {
+/** Validates the upload (every point decodes) and returns what to store; stores nothing. */
+export async function buildRegistration(input: { email: string; upload: unknown }, deps: OpaqueDeps = {}): Promise<PakeRegistrationWrite> {
   const email = normalizeEmail(input.email);
   if (!email) throw new OpaqueServerError("invalid_input");
   const upload = fromB64u(input.upload, OPAQUE_LEN.registrationUpload);
-  const port = deps.port ?? vaultPort();
-  await withSetup(deps, null, async (k) => {
+  return withSetup(deps, null, async (k) => {
     const engine = await engineOf(deps);
     let record: Uint8Array;
     try {
@@ -320,10 +319,30 @@ export async function registerFinish(input: { email: string; upload: unknown }, 
       throw new OpaqueServerError("invalid_input");
     }
     const lookup = k.lookup(email);
-    const reg: PakeRegistrationWrite = { lookup, credentialId: k.credentialId(lookup), record, setupKid: k.kid };
-    const ok = who.kind === "member" ? await port.storePakeRegistration(who.caller, reg, who.stepUp) : await port.storePakeSignupRegistration(who.caller, reg);
-    if (!ok) throw new OpaqueServerError("registration_refused");
+    return { lookup, credentialId: k.credentialId(lookup), record, setupKid: k.kid.slice() };
   });
+}
+
+/** Stores a built registration for the member (passkey proof) or the fresh sign-up identity. */
+export async function storeRegistration(reg: PakeRegistrationWrite, who: RegistrationKind, deps: OpaqueDeps = {}): Promise<void> {
+  const port = deps.port ?? vaultPort();
+  const ok = who.kind === "member" ? await port.storePakeRegistration(who.caller, reg, who.stepUp) : await port.storePakeSignupRegistration(who.caller, reg);
+  if (!ok) throw new OpaqueServerError("registration_refused");
+}
+
+/** buildRegistration + storeRegistration. */
+export async function registerFinish(input: { email: string; upload: unknown }, who: RegistrationKind, deps: OpaqueDeps = {}): Promise<void> {
+  await storeRegistration(await buildRegistration(input, deps), who, deps);
+}
+
+/** True once an OPAQUE setup exists (needed before a password sign-up can start). */
+export async function opaqueSetupReady(deps: OpaqueDeps = {}): Promise<boolean> {
+  try {
+    const port = deps.port ?? vaultPort();
+    return (await port.pakeAvailable()) && (await port.activePakeSetup()) !== null;
+  } catch {
+    return false;
+  }
 }
 
 /** Whether password sign-in can be offered (schema live). Never throws. */
