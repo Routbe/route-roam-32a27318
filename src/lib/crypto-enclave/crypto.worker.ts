@@ -9,7 +9,6 @@ import { isEnclaveOp, runEnclaveOp } from "./enclave-core";
 import type { EnclaveRequest, EnclaveResponse } from "./protocol";
 import { createEnclaveDispatcher } from "./dispatch";
 import { requestAbort } from "./operation-control";
-import { wipeEngineMemory } from "./opaque-engine";
 
 declare const self: DedicatedWorkerGlobalScope;
 
@@ -25,7 +24,3 @@ self.onmessage = (event: MessageEvent<EnclaveRequest | { control: "abort"; id: n
   }
   void dispatch(data);
 };
-// Teardown: zero-fill every engine memory that is still alive before the worker goes.
-self.addEventListener("close", () => {
-  wipeEngineMemory();
-});
