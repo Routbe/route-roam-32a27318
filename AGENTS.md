@@ -47,6 +47,7 @@ use the editor.
 ## Server-rendered language and hydration
 - The root route negotiates the locale on the server (rout_lang cookie, then Accept-Language; src/lib/locale-negotiation.ts) and passes it to I18nProvider and <html lang>; on the server, direct i18n.t() calls translate in the request's locale (src/lib/i18n-request.server.ts, installed in src/server.ts). Why: a first frame in the wrong language swapped all text after hydration and forced server-rendered Suspense boundaries back to loading.
 - Root-level boundaries never wrap a lazy public shell, and MDX doc pages are preloaded in the router's hydrate hook (src/components/mdx/doc-modules.ts). Why: a still-loading lazy module during hydration blanks the server HTML on any provider update.
+- The sign-in route loads providers and auth readiness in its loader (getAuthProviders, same answer as /api/public/auth/providers) and the session placeholder in the top bar has the signed-out button's box. Why: content inserted after hydration made the sign-in page jump (CLS 0.1).
 - Public controls are at least 44x44 px (WCAG 2.5.5 AAA); compact chips draw their visible pill inside the larger button and short text links use the tap-wide utility. Why: touch targets grow without changing the look.
 
 ## Zero-knowledge booking payloads
