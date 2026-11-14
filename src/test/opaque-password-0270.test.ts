@@ -213,7 +213,6 @@ describe("0270 OPAQUE + PoW on a replay of db/", () => {
     // Audit rows with 0270 actions exist, so the wider action check stays (append-only log).
     const con = await db.query<{ d: string }>("select pg_get_constraintdef(oid) as d from pg_constraint where conname = 'audit_logs_action_check'");
     expect(con.rows[0]!.d).toContain("pake_login");
-    await db.exec("alter table vault_enclave.audit_logs drop constraint audit_logs_action_check");
     await apply(SQL_0270);
     expect(await port.pakeAvailable()).toBe(true);
   });
