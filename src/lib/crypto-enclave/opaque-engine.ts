@@ -200,7 +200,7 @@ const contextBytes = (context: string) => {
 // ------------------------------------------------------------------ raw KDF
 
 /** Argon2id (RFC 9106, v1.3) over a fixed memory sized for exactly this call. */
-export function argon2id(password: Uint8Array, salt: Uint8Array, outLen: number, k: KsfParams): Promise<Uint8Array> {
+export async function argon2id(password: Uint8Array, salt: Uint8Array, outLen: number, k: KsfParams): Promise<Uint8Array> {
   if (!Number.isInteger(outLen) || outLen < 4 || outLen > 1024 || k.mKiB < 8 * k.p || k.mKiB > OPAQUE_KSF.mKiB) {
     return Promise.reject(new OpaqueEngineError("opaque_invalid_input"));
   }
@@ -215,7 +215,7 @@ export function argon2id(password: Uint8Array, salt: Uint8Array, outLen: number,
 
 // ------------------------------------------------------------------ client
 
-export function clientRegisterStart(password: Uint8Array): Promise<{ request: Uint8Array; state: Uint8Array }> {
+export async function clientRegisterStart(password: Uint8Array): Promise<{ request: Uint8Array; state: Uint8Array }> {
   needPassword(password);
   return withFrame(ENGINE_PAGES.small, (f) => {
     const pw = f.put(password);
@@ -227,7 +227,7 @@ export function clientRegisterStart(password: Uint8Array): Promise<{ request: Ui
   });
 }
 
-export function clientRegisterFinish(
+export async function clientRegisterFinish(
   password: Uint8Array,
   state: Uint8Array,
   response: Uint8Array,
@@ -252,7 +252,7 @@ export function clientRegisterFinish(
   });
 }
 
-export function clientLoginStart(password: Uint8Array): Promise<{ ke1: Uint8Array; state: Uint8Array }> {
+export async function clientLoginStart(password: Uint8Array): Promise<{ ke1: Uint8Array; state: Uint8Array }> {
   needPassword(password);
   return withFrame(ENGINE_PAGES.small, (f) => {
     const pw = f.put(password);
@@ -264,7 +264,7 @@ export function clientLoginStart(password: Uint8Array): Promise<{ ke1: Uint8Arra
   });
 }
 
-export function clientLoginFinish(
+export async function clientLoginFinish(
   password: Uint8Array,
   state: Uint8Array,
   ke2: Uint8Array,
@@ -296,7 +296,7 @@ export function clientLoginFinish(
 
 // ------------------------------------------------------------------ server
 
-export function serverSetupNew(): Promise<Uint8Array> {
+export async function serverSetupNew(): Promise<Uint8Array> {
   return withFrame(ENGINE_PAGES.small, (f) => {
     const out = f.reserve(OPAQUE_LEN.stateMax);
     const len = f.reserve(4);
@@ -305,7 +305,7 @@ export function serverSetupNew(): Promise<Uint8Array> {
   });
 }
 
-export function serverPublicKey(setup: Uint8Array): Promise<Uint8Array> {
+export async function serverPublicKey(setup: Uint8Array): Promise<Uint8Array> {
   needState(setup);
   return withFrame(ENGINE_PAGES.small, (f) => {
     const st = f.put(setup);
@@ -315,7 +315,7 @@ export function serverPublicKey(setup: Uint8Array): Promise<Uint8Array> {
   });
 }
 
-export function serverRegisterStart(setup: Uint8Array, request: Uint8Array, credentialId: Uint8Array): Promise<Uint8Array> {
+export async function serverRegisterStart(setup: Uint8Array, request: Uint8Array, credentialId: Uint8Array): Promise<Uint8Array> {
   needState(setup);
   need(request, OPAQUE_LEN.registrationRequest);
   if (credentialId.length === 0 || credentialId.length > 64) return Promise.reject(new OpaqueEngineError("opaque_invalid_input"));
@@ -330,7 +330,7 @@ export function serverRegisterStart(setup: Uint8Array, request: Uint8Array, cred
 }
 
 /** Validates the client's upload (every point decodes) and returns the record to store. */
-export function serverRegisterFinish(upload: Uint8Array): Promise<Uint8Array> {
+export async function serverRegisterFinish(upload: Uint8Array): Promise<Uint8Array> {
   need(upload, OPAQUE_LEN.registrationUpload);
   return withFrame(ENGINE_PAGES.small, (f) => {
     const up = f.put(upload);
@@ -341,7 +341,7 @@ export function serverRegisterFinish(upload: Uint8Array): Promise<Uint8Array> {
 }
 
 /** `record === null` runs the RFC 9807 fake-record path for unknown accounts. */
-export function serverLoginStart(
+export async function serverLoginStart(
   setup: Uint8Array,
   record: Uint8Array | null,
   ke1: Uint8Array,
@@ -368,7 +368,7 @@ export function serverLoginStart(
 }
 
 /** Throws opaque_auth_failed for a wrong password, a fake record or a tampered KE3. */
-export function serverLoginFinish(state: Uint8Array, ke3: Uint8Array, context: string): Promise<Uint8Array> {
+export async function serverLoginFinish(state: Uint8Array, ke3: Uint8Array, context: string): Promise<Uint8Array> {
   needState(state);
   need(ke3, OPAQUE_LEN.ke3);
   const ctx = contextBytes(context);
