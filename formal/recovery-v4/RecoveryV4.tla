@@ -168,7 +168,7 @@ WriteCard(c) ==
   /\ pc[c] = "staged" /\ card = "linked"
   /\ cardHolds' = cur[c]
   /\ pc' = [pc EXCEPT ![c] = "cardOk"]
-  /\ UNCHANGED <<dbVars, seen, cur, nreq, outReq, msgs, resps, faults>>
+  /\ UNCHANGED <<dbVars, seen, cur, pol, nreq, outReq, msgs, resps, faults>>
 
 \* The card leaves the field halfway: the NDEF record is torn.
 CardPulled(c) ==
