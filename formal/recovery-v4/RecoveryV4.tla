@@ -79,14 +79,14 @@ VARIABLES
   \* physical card
   cardHolds,  \* ceremony id whose share the card holds; -1 = torn write
   \* clients (browser + crypto worker; volatile)
-  pc, seen, cur, pol, nreq, proof, outReq,
+  pc, seen, cur, pol, nreq, outReq,
   \* network (HTTP over the pooler)
   msgs, resps,
   \* bookkeeping
   faults
 
 dbVars  == <<cer, level, ver, gen, card, proofs, idem, nextId>>
-cliVars == <<pc, seen, cur, pol, nreq, proof, outReq>>
+cliVars == <<pc, seen, cur, pol, nreq, outReq>>
 vars    == <<dbVars, cardHolds, cliVars, msgs, resps, faults>>
 
 Pending == {x \in cer : x.status = "pending"}
@@ -113,13 +113,13 @@ Init ==
        /\ nextId = IF l = "none" THEN 1 ELSE 2
        /\ cardHolds = IF l = "3of4" THEN 1 ELSE 0
        /\ seen = [c \in Clients |-> [ver |-> 0, level |-> l, pend |-> 0,
-                                     act |-> IF l = "none" THEN 0 ELSE 1]]
+                                     act |-> IF UseCAS \/ l = "none" THEN 0 ELSE 1]]
   /\ ver = 0 /\ card = "linked"
   /\ proofs = [p \in Steps |-> "unissued"]
   /\ idem = [k \in Keys |-> NoResp]
   /\ pc = [c \in Clients |-> "idle"] /\ cur = [c \in Clients |-> 0]
   /\ pol = [c \in Clients |-> "none"] /\ nreq = [c \in Clients |-> 0]
-  /\ proof = [c \in Clients |-> 0] /\ outReq = [c \in Clients |-> NoReq]
+  /\ outReq = [c \in Clients |-> NoReq]
   /\ msgs = {} /\ resps = {} /\ faults = 0
 
 -----------------------------------------------------------------------------
@@ -128,36 +128,34 @@ Init ==
 
 Send(c, op, kd, p, cid, pf, tap) ==
   LET m == [c |-> c, n |-> nreq[c] + 1, op |-> op, kind |-> kd, pol |-> p, cid |-> cid,
-            ev |-> seen[c].ver, sl |-> seen[c].level, sp |-> seen[c].pend, sa |-> seen[c].act,
+            ev |-> seen[c].ver, sl |-> IF UseCAS THEN "none" ELSE seen[c].level,
+            sp |-> IF UseCAS THEN 0 ELSE seen[c].pend, sa |-> seen[c].act,
             pf |-> pf, tap |-> tap]
   IN /\ nreq[c] < MaxReq
      /\ msgs' = msgs \cup {m}
      /\ outReq' = [outReq EXCEPT ![c] = m]
      /\ nreq' = [nreq EXCEPT ![c] = nreq[c] + 1]
      /\ pc' = [pc EXCEPT ![c] = "wait"]
-     /\ proof' = [proof EXCEPT ![c] = 0]
 
-\* Passkey assertion; the proof is registered on the database clock (300 s, single use).
-StepUp(c) ==
-  /\ pc[c] \in {"idle", "ready"} /\ proof[c] = 0
-  /\ \E p \in Steps :
-       /\ proofs[p] = "unissued"
-       /\ proofs' = [proofs EXCEPT ![p] = "fresh"]
-       /\ proof' = [proof EXCEPT ![c] = p]
-  /\ UNCHANGED <<cer, level, ver, gen, card, idem, nextId, cardHolds,
-                 pc, seen, cur, pol, nreq, outReq, msgs, resps, faults>>
+\* Passkey step-up right before a request: the proof is registered on the
+\* database clock (300 s, single use) and travels inside the request.
+Unissued == {p \in Steps : proofs[p] = "unissued"}
+NewProof == IF Unissued = {} THEN 0 ELSE CHOOSE p \in Unissued : \A q \in Unissued : p <= q
+Issue(pf) == IF pf = 0 THEN UNCHANGED proofs ELSE proofs' = [proofs EXCEPT ![pf] = "fresh"]
 
 StartBegin(c) ==
   /\ pc[c] = "idle" /\ seen[c].pend = 0
   /\ \E kp \in BeginKinds(seen[c].level) :
-       /\ Send(c, "begin", kp[1], kp[2], 0, proof[c], 0)
+       /\ Send(c, "begin", kp[1], kp[2], 0, NewProof, 0)
        /\ pol' = [pol EXCEPT ![c] = kp[2]]
-  /\ UNCHANGED <<dbVars, cardHolds, seen, cur, resps, faults>>
+  /\ Issue(NewProof)
+  /\ UNCHANGED <<cer, level, ver, gen, card, idem, nextId, cardHolds, seen, cur, resps, faults>>
 
 StartRemove(c) ==
   /\ pc[c] = "idle" /\ seen[c].level # "none"
-  /\ Send(c, "remove", "remove", "none", 0, proof[c], 0)
-  /\ UNCHANGED <<dbVars, cardHolds, seen, cur, pol, resps, faults>>
+  /\ Send(c, "remove", "remove", "none", 0, NewProof, 0)
+  /\ Issue(NewProof)
+  /\ UNCHANGED <<cer, level, ver, gen, card, idem, nextId, cardHolds, seen, cur, pol, resps, faults>>
 
 \* A new session finds a pending ceremony (its own crashed one or another device's).
 StartAbortStale(c) ==
@@ -170,7 +168,7 @@ WriteCard(c) ==
   /\ pc[c] = "staged" /\ card = "linked"
   /\ cardHolds' = cur[c]
   /\ pc' = [pc EXCEPT ![c] = "cardOk"]
-  /\ UNCHANGED <<dbVars, seen, cur, pol, nreq, proof, outReq, msgs, resps, faults>>
+  /\ UNCHANGED <<dbVars, seen, cur, nreq, outReq, msgs, resps, faults>>
 
 \* The card leaves the field halfway: the NDEF record is torn.
 CardPulled(c) ==
@@ -187,8 +185,11 @@ SendConfirm(c) ==
 
 SendCommit(c) ==
   /\ pc[c] = "ready"
-  /\ Send(c, "commit", "none", "none", cur[c], proof[c], 0)
-  /\ UNCHANGED <<dbVars, cardHolds, seen, cur, pol, resps, faults>>
+  \* with or without a step-up: only a commit that lowers the level needs one
+  /\ \E pf \in {0, NewProof} :
+       /\ Send(c, "commit", "none", "none", cur[c], pf, 0)
+       /\ Issue(pf)
+  /\ UNCHANGED <<cer, level, ver, gen, card, idem, nextId, cardHolds, seen, cur, pol, resps, faults>>
 
 SendAbort(c) ==
   /\ pc[c] \in {"staged", "cardOk", "ready"}
@@ -199,12 +200,14 @@ SendAbort(c) ==
 Abandon(c) ==
   /\ pc[c] \in {"staged", "cardOk", "ready"} /\ nreq[c] = MaxReq
   /\ pc' = [pc EXCEPT ![c] = "idle"] /\ cur' = [cur EXCEPT ![c] = 0]
-  /\ UNCHANGED <<dbVars, cardHolds, seen, pol, nreq, proof, outReq, msgs, resps, faults>>
+  /\ pol' = [pol EXCEPT ![c] = "none"]
+  /\ UNCHANGED <<dbVars, cardHolds, seen, nreq, outReq, msgs, resps, faults>>
 
 Finish(c) ==
   /\ pc[c] = "committed"
   /\ pc' = [pc EXCEPT ![c] = "idle"] /\ cur' = [cur EXCEPT ![c] = 0]
-  /\ UNCHANGED <<dbVars, cardHolds, seen, pol, nreq, proof, outReq, msgs, resps, faults>>
+  /\ pol' = [pol EXCEPT ![c] = "none"]
+  /\ UNCHANGED <<dbVars, cardHolds, seen, nreq, outReq, msgs, resps, faults>>
 
 \* Timeout: resend the SAME request (same idempotency key).
 Retry(c) ==
@@ -217,7 +220,8 @@ Recv(c) ==
   /\ \E r \in resps :
        /\ r.c = c /\ r.n = nreq[c]
        /\ resps' = resps \ {r}
-       /\ seen' = [seen EXCEPT ![c] = [ver |-> r.ver, level |-> r.level, pend |-> r.pend, act |-> r.act]]
+       /\ seen' = [seen EXCEPT ![c] = [ver |-> r.ver, level |-> r.level, pend |-> r.pend,
+                                        act |-> IF UseCAS THEN 0 ELSE r.act]]
        /\ IF r.ok /\ r.op = "begin"
             THEN /\ pc' = [pc EXCEPT ![c] = IF pol[c] = "3of4" THEN "staged" ELSE "ready"]
                  /\ cur' = [cur EXCEPT ![c] = r.cid]
@@ -226,8 +230,9 @@ Recv(c) ==
           ELSE IF r.ok /\ r.op = "commit"
             THEN pc' = [pc EXCEPT ![c] = "committed"] /\ UNCHANGED cur
           ELSE pc' = [pc EXCEPT ![c] = "idle"] /\ cur' = [cur EXCEPT ![c] = 0]
+  /\ pol' = IF r.ok /\ r.op \in {"begin", "confirm", "commit"} THEN pol ELSE [pol EXCEPT ![c] = "none"]
   /\ outReq' = [outReq EXCEPT ![c] = NoReq]
-  /\ UNCHANGED <<dbVars, cardHolds, pol, nreq, proof, msgs, faults>>
+  /\ UNCHANGED <<dbVars, cardHolds, nreq, msgs, faults>>
 
 \* Late or duplicate answers for an earlier request or a dead session are ignored.
 Discard ==
@@ -371,9 +376,9 @@ CardRelink ==
 Crash(c) ==
   /\ pc[c] # "idle" /\ faults < MaxFaults
   /\ pc' = [pc EXCEPT ![c] = "idle"] /\ cur' = [cur EXCEPT ![c] = 0]
-  /\ proof' = [proof EXCEPT ![c] = 0] /\ outReq' = [outReq EXCEPT ![c] = NoReq]
+  /\ outReq' = [outReq EXCEPT ![c] = NoReq] /\ pol' = [pol EXCEPT ![c] = "none"]
   /\ faults' = faults + 1
-  /\ UNCHANGED <<dbVars, cardHolds, seen, pol, nreq, msgs, resps>>
+  /\ UNCHANGED <<dbVars, cardHolds, seen, nreq, msgs, resps>>
 
 \* The pooler / network drops a request before, or an answer after, its transaction.
 DropMsg ==
@@ -397,7 +402,7 @@ Progress(c) ==
   WriteCard(c) \/ SendConfirm(c) \/ SendCommit(c) \/ SendAbort(c) \/ Abandon(c) \/ Finish(c)
 
 Client(c) ==
-  \/ StepUp(c) \/ StartBegin(c) \/ StartRemove(c) \/ StartAbortStale(c)
+  \/ StartBegin(c) \/ StartRemove(c) \/ StartAbortStale(c)
   \/ Progress(c) \/ Retry(c) \/ Recv(c)
 
 Fault ==
