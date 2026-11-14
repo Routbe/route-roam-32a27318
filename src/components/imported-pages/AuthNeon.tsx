@@ -18,6 +18,7 @@ import { isAdminMode } from "@/lib/app-mode";
 import { usePortalFrame } from "@/components/layout/PortalContext";
 import { withAltcha } from "@/lib/altcha-client";
 import { AUTH_UNAVAILABLE_TEXT, type AuthReadiness } from "@/lib/auth-readiness";
+import type { AuthProvidersInfo } from "@/lib/auth-providers.functions";
 import { useI18n } from "@/lib/i18n";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -70,7 +71,7 @@ async function enrollPasskey(context: string, name: string) {
  * 2FA on finish with a second step (passkey, authenticator app, SMS or recovery
  * code). Sign-up creates the account together with its first passkey.
  */
-export default function AuthNeon({ initialMode = "signin" }: { initialMode?: Mode }) {
+export default function AuthNeon({ initialMode = "signin", initialProviders = null }: { initialMode?: Mode; initialProviders?: AuthProvidersInfo | null }) {
   const { t } = useTranslation();
   const { locale } = useI18n();
   const adminPortal = Boolean(usePortalFrame()) || isAdminMode();
@@ -94,8 +95,8 @@ export default function AuthNeon({ initialMode = "signin" }: { initialMode?: Mod
   const [parentEmail, setParentEmail] = useState("");
   const minor = isMinorDob(dob);
   const redirected = useRef(false);
-  const [readiness, setReadiness] = useState<AuthReadiness | null>(null);
-  const [configuredProviders, setConfiguredProviders] = useState<string[]>([]);
+  const [readiness, setReadiness] = useState<AuthReadiness | null>(initialProviders?.readiness ?? null);
+  const [configuredProviders, setConfiguredProviders] = useState<string[]>(initialProviders?.providers ?? []);
   const unavailable = readiness?.ready === false;
   const [embedded, setEmbedded] = useState(false);
   useEffect(() => {
@@ -103,6 +104,7 @@ export default function AuthNeon({ initialMode = "signin" }: { initialMode?: Mod
   }, []);
 
   useEffect(() => {
+    if (initialProviders) return;
     fetch("/api/public/auth/providers", { credentials: "omit" })
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
       .then((body: { providers?: string[]; readiness?: AuthReadiness }) => {
