@@ -112,6 +112,7 @@ export default function AuthNeon({ initialMode = "signin", initialProviders = nu
         setConfiguredProviders(body.providers ?? []);
       })
       .catch(() => setReadiness(null));
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- runs once; server data never changes on this page
   }, []);
 
   useEffect(() => {
