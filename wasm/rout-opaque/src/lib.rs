@@ -37,6 +37,10 @@ use rand_core::{CryptoRng, Error as RandError, RngCore};
 extern "C" {
     /// Fills `len` bytes at `ptr` from the host CSPRNG (crypto.getRandomValues).
     fn rout_random(ptr: *mut u8, len: usize);
+}
+
+extern "C" {
+    /// Linker-defined: first byte after the stack and static data.
     static __heap_base: u8;
 }
 
