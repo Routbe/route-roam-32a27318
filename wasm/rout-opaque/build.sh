@@ -23,8 +23,13 @@ esac
 
 TARGET_DIR="$(mktemp -d)"
 trap 'rm -rf "$TARGET_DIR"' EXIT
-# Path remapping keeps local paths out of the binary even if a panic location survives.
-export RUSTFLAGS="--remap-path-prefix=${CARGO_HOME:-$HOME/.cargo}=/cargo --remap-path-prefix=$PWD=/rout-opaque"
+# Fixed, imported linear memory: the host creates WebAssembly.Memory with
+# initial == maximum for every operation and zero-fills it afterwards. 32 pages
+# (2 MiB) minimum for steps without key stretching, 1088 pages (68 MiB) maximum
+# for the Argon2id steps. No allocator is linked, so the module contains no
+# memory.grow (checked by opaque-engine.test.ts). Path remapping keeps local
+# paths out of the binary even if a panic location survives.
+export RUSTFLAGS="-C link-arg=--import-memory -C link-arg=--initial-memory=2097152 -C link-arg=--max-memory=71303168 -C link-arg=-zstack-size=1048576 --remap-path-prefix=${CARGO_HOME:-$HOME/.cargo}=/cargo --remap-path-prefix=$PWD=/rout-opaque"
 export SOURCE_DATE_EPOCH=0
 CARGO_TARGET_DIR="$TARGET_DIR" cargo build --release --locked --target wasm32-unknown-unknown
 WASM="$TARGET_DIR/wasm32-unknown-unknown/release/rout_opaque.wasm"
