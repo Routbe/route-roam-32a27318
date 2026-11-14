@@ -9,7 +9,7 @@ type Outcome = { ok: true; result: unknown } | { ok: false; code: EnclaveErrorCo
 /** An injectable, ordered worker dispatcher; queue and transfer behavior are testable without Web Crypto mocks. */
 export function createEnclaveDispatcher(
   isOp: (op: unknown) => op is EnclaveOp,
-  run: (op: EnclaveOp, args: unknown) => Promise<Outcome>,
+  run: (op: EnclaveOp, args: unknown, id: number) => Promise<Outcome>,
   post: (response: EnclaveResponse, transfer: Transferable[]) => void,
 ) {
   let queue = Promise.resolve();
@@ -23,7 +23,7 @@ export function createEnclaveDispatcher(
     const op = msg.op;
     queue = queue.then(async () => {
       post({ id, started: true }, []);
-      const outcome = await run(op, msg.args);
+      const outcome = await run(op, msg.args, id);
       const response: EnclaveResponse = { id, ...outcome };
       try {
         const transfer: Transferable[] = [];

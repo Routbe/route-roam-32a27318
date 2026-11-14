@@ -89,6 +89,36 @@ export interface EnclaveOps {
   "rve1.open": { req: { userId: string; kind: "vcc"; purpose: string; envelope: Uint8Array }; res: { plaintext: Uint8Array } };
 
   "hash.sha256Hex": { req: { text: string }; res: string };
+
+  // ---- Password engine (Stap 3): Hashcash, paranoid input, OPAQUE + Argon2id ----
+
+  /** Paranoid input (opt-in): a fixed 1-page Wasm memory per slot; key bytes stream in, never a JS string. */
+  "password.open": { req: Record<string, never>; res: { slot: string; maxBytes: number } };
+  /** One key's UTF-8 bytes (transferred, wiped). Returns the number of characters for the dots. */
+  "password.key": { req: { slot: string; key: Uint8Array }; res: { length: number } };
+  "password.backspace": { req: { slot: string }; res: { length: number } };
+  "password.clear": { req: { slot: string }; res: { length: number } };
+  "password.close": { req: { slot: string }; res: null };
+  /** Hashcash nonce for a server challenge; abortable between batches. */
+  "pow.solve": { req: { challenge: Uint8Array; bits: number }; res: { nonce: Uint8Array } };
+  /** The password source is consumed: a paranoid slot is wiped and closed, typed bytes are wiped. */
+  "opaque.registerStart": { req: { password: PasswordSource }; res: { handle: string; request: Uint8Array } };
+  /** Runs Argon2id (64 MiB, 4 passes) in the engine; the vault key stays pending under the handle. */
+  "opaque.registerFinish": { req: { handle: string; response: Uint8Array }; res: { upload: Uint8Array; keyId: string } };
+  "opaque.loginStart": { req: { password: PasswordSource }; res: { handle: string; ke1: Uint8Array } };
+  /** Fails with auth_failed for a wrong password or an unknown account (indistinguishable). */
+  "opaque.loginFinish": { req: { handle: string; ke2: Uint8Array }; res: { ke3: Uint8Array; keyId: string } };
+  /** After the server accepted: installs the pending vault key (non-extractable) for this member. */
+  "opaque.commit": { req: { handle: string; userId: string }; res: { keyId: string } };
+  "opaque.discard": { req: { handle: string }; res: null };
+  /** Whether this worker holds a password vault key for the member. */
+  "opaque.vaultKey": { req: { userId: string }; res: { keyId: string } | null };
+  /**
+   * Wipes every password slot, handshake, pending and installed password vault
+   * key and live engine memory. Queued like any request, so it runs only when
+   * the worker is idle (H.1): after 30 s hidden, on lock and before logout.
+   */
+  "secure.wipe": { req: Record<string, never>; res: { wiped: number } };
   /**
    * Blind Hash Matching: hash the member's identities with the partner's
    * domain separation and return only the indexes that match a partner hash.
@@ -110,6 +140,9 @@ export interface EnclaveOps {
   "protocol.verifyChain": { req: { events: SignedEvent[] }; res: { ok: true } | { ok: false; error: string; at: number } };
 }
 
+/** Where a password comes from: a paranoid slot, or UTF-8 bytes of the normal field (transferred). */
+export type PasswordSource = { slot: string } | { bytes: Uint8Array };
+
 export type EnclaveOp = keyof EnclaveOps;
 export type EnclaveArgs<K extends EnclaveOp> = EnclaveOps[K]["req"];
 export type EnclaveResult<K extends EnclaveOp> = EnclaveOps[K]["res"];
@@ -129,6 +162,11 @@ export type EnclaveErrorCode =
   | "card_required"
   | "key_mismatch"
   | "no_device_key"
+  | "aborted"
+  | "auth_failed"
+  | "password_too_short"
+  | "password_too_long"
+  | "pow_failed"
   | "internal";
 
 export type EnclaveResponse =

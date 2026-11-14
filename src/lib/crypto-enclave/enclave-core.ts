@@ -31,6 +31,9 @@ import { createDpopProof } from "@/lib/protocol/dpop";
 import { signEvent, verifyEvent, verifyChain } from "@/lib/protocol/events";
 import { eventAad, identityAad, loadIdentity, saveIdentity } from "@/lib/protocol/identity-store";
 import type { EnclaveErrorCode, EnclaveOp, EnclaveOps } from "./protocol";
+import { EnclaveFailure, fail } from "./enclave-failure";
+import { beginOperation, endOperation } from "./operation-control";
+import { passwordHandlers, type PasswordOp } from "./password-enclave";
 import { ENVELOPE_MAX_BYTES, ENVELOPE_MAX_PLAINTEXT, generateRecipientKeys, keyId, openEnvelope, PUBLIC_KEY_BYTES, publicKeyOf, sealEnvelope } from "./pqc-envelope";
 import { loadRve1Key, rve1SeedAad, saveRve1Key } from "./rve1-key-store";
 import { vaultContext } from "@/lib/vault/vault-context";
@@ -62,15 +65,7 @@ const PENDING_TTL = 15 * MINUTE;
 // Largest input whose base64url ciphertext fits the existing <64 KiB blind column.
 const MAX_PLAINTEXT_BYTES = 49120;
 
-export class EnclaveFailure extends Error {
-  constructor(readonly code: EnclaveErrorCode) {
-    super(code);
-  }
-}
-
-const fail = (code: EnclaveErrorCode): never => {
-  throw new EnclaveFailure(code);
-};
+export { EnclaveFailure };
 
 const newHandle = () => b64u.encode(crypto.getRandomValues(new Uint8Array(16)));
 const str = (v: unknown, max = 4096): string => (typeof v === "string" && v.length <= max ? v : fail("invalid_input"));
@@ -364,8 +359,9 @@ async function storeMaster(userId: string, entropy: Uint8Array) {
 // ---- Operations -------------------------------------------------------------
 
 type Handlers = { [K in EnclaveOp]: (args: EnclaveOps[K]["req"]) => Promise<EnclaveOps[K]["res"]> };
+type CoreHandlers = Omit<Handlers, PasswordOp>;
 
-export const handlers: Handlers = {
+const coreHandlers: CoreHandlers = {
   async "vault.prepare"({ secret }) {
     if (!isEphemeralSecret(secret)) fail("invalid_input");
     const base = await vaultHkdfBase(secret); // wipes the decoded secret bytes
@@ -841,12 +837,15 @@ export const handlers: Handlers = {
   },
 };
 
+export const handlers: Handlers = { ...coreHandlers, ...passwordHandlers };
+
 export function isEnclaveOp(op: unknown): op is EnclaveOp {
   return typeof op === "string" && Object.prototype.hasOwnProperty.call(handlers, op);
 }
 
 /** Runs one request; never leaks error messages (they could contain data), only codes. */
-export async function runEnclaveOp(op: EnclaveOp, args: unknown): Promise<{ ok: true; result: unknown } | { ok: false; code: EnclaveErrorCode }> {
+export async function runEnclaveOp(op: EnclaveOp, args: unknown, id: number | null = null): Promise<{ ok: true; result: unknown } | { ok: false; code: EnclaveErrorCode }> {
+  beginOperation(id);
   try {
     if (!isEnclaveOp(op)) fail("invalid_input");
     if (typeof args !== "object" || args === null) fail("invalid_input");
@@ -855,6 +854,7 @@ export async function runEnclaveOp(op: EnclaveOp, args: unknown): Promise<{ ok: 
   } catch (e) {
     return { ok: false, code: e instanceof EnclaveFailure ? e.code : "internal" };
   } finally {
+    endOperation(id);
     wipeMessage(args);
   }
 }

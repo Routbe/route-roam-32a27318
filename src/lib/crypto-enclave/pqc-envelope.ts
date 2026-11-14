@@ -10,7 +10,7 @@
  * Layout (all fixed except the AEAD body):
  *   0   4    magic "RVE1" (checked by db/0221)
  *   4   1    suite (1 = this construction)
- *   5   1    token kind (1 vtk, 2 vcc, 3 mpc, 4 sdm; booking blobs 5 bkh, 6 bkg)
+ *   5   1    token kind (1 vtk, 2 vcc, 3 mpc, 4 sdm; booking blobs 5 bkh, 6 bkg; 7 opk)
  *   6   1    key holder (1 server vault, 2 member device, 3 shard factor, 4 booking guest)
  *   7   16   recipient key id = SHA-256("rout.rve1.kid" || publicKey)[0..16)
  *   23  1600 hybrid KEM ciphertext (ML-KEM-1024 1568 || X25519 32)
@@ -24,7 +24,9 @@
  * vtk and sdm the server vault, vcc only the member's device, mpc only the
  * shard's own factor. Booking blobs (booking-seal.ts, never stored in the
  * vault): bkh only the host's device, bkg only the guest's own link key.
- * Sealing to, or opening as, any other holder is refused.
+ * The OPAQUE server setup (opk, db-pending/0270) is held only by the server
+ * vault and is never a vault token. Sealing to, or opening as, any other
+ * holder is refused.
  *
  * Every opening failure throws the same EnvelopeError: no oracle about which
  * check failed. Shared secrets and derived keys are wiped in `finally`; the
@@ -48,7 +50,10 @@ export type KeyHolder = "server_vault" | "member_device" | "shard_factor" | "boo
 /** End-to-end encrypted booking blobs: host copy and guest copy. Never vault tokens. */
 export const BOOKING_ENVELOPE_KINDS = ["bkh", "bkg"] as const;
 export type BookingEnvelopeKind = (typeof BOOKING_ENVELOPE_KINDS)[number];
-export type EnvelopeKind = OpaqueTokenKind | BookingEnvelopeKind;
+/** Server-held system secrets that are not vault tokens: the OPAQUE server setup. */
+export const SYSTEM_ENVELOPE_KINDS = ["opk"] as const;
+export type SystemEnvelopeKind = (typeof SYSTEM_ENVELOPE_KINDS)[number];
+export type EnvelopeKind = OpaqueTokenKind | BookingEnvelopeKind | SystemEnvelopeKind;
 
 /** Owner-confirmed policy: who may ever decrypt each kind. */
 export const KIND_KEY_HOLDER: Readonly<Record<OpaqueTokenKind, KeyHolder>> = Object.freeze({
@@ -64,15 +69,21 @@ export const BOOKING_KIND_KEY_HOLDER: Readonly<Record<BookingEnvelopeKind, KeyHo
   bkg: "booking_guest",
 });
 
+/** Owner decision (Stap 3): the OPAQUE setup opens only inside the server vault. */
+export const SYSTEM_KIND_KEY_HOLDER: Readonly<Record<SystemEnvelopeKind, KeyHolder>> = Object.freeze({
+  opk: "server_vault",
+});
+
 function holderOf(kind: EnvelopeKind): KeyHolder | undefined {
   if (Object.hasOwn(KIND_KEY_HOLDER, kind)) return KIND_KEY_HOLDER[kind as OpaqueTokenKind];
+  if (Object.hasOwn(SYSTEM_KIND_KEY_HOLDER, kind)) return SYSTEM_KIND_KEY_HOLDER[kind as SystemEnvelopeKind];
   if (Object.hasOwn(BOOKING_KIND_KEY_HOLDER, kind)) return BOOKING_KIND_KEY_HOLDER[kind as BookingEnvelopeKind];
   return undefined;
 }
 
 const MAGIC = Uint8Array.of(0x52, 0x56, 0x45, 0x31); // "RVE1"
 const SUITE = 1;
-const KIND_CODE: Readonly<Record<EnvelopeKind, number>> = Object.freeze({ vtk: 1, vcc: 2, mpc: 3, sdm: 4, bkh: 5, bkg: 6 });
+const KIND_CODE: Readonly<Record<EnvelopeKind, number>> = Object.freeze({ vtk: 1, vcc: 2, mpc: 3, sdm: 4, bkh: 5, bkg: 6, opk: 7 });
 const HOLDER_CODE: Readonly<Record<KeyHolder, number>> = Object.freeze({ server_vault: 1, member_device: 2, shard_factor: 3, booking_guest: 4 });
 
 const KID_LEN = 16;
