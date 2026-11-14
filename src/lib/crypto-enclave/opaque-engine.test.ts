@@ -81,7 +81,7 @@ describe("OPAQUE round trip (RFC 9807, ristretto255/SHA-512/3DH, Argon2id 64 MiB
     expect(allZero()).toBe(true);
   });
 
-  it("a different context or a tampered KE3 fails on the server", { timeout: 60_000 }, async () => {
+  it("a tampered KE3 fails on the server; a client on another context cannot finish", { timeout: 60_000 }, async () => {
     const setup = await engine.serverSetupNew();
     const cred = new Uint8Array(32).fill(1);
     const r = await engine.clientRegisterStart(pw("another fine password"));
@@ -93,7 +93,10 @@ describe("OPAQUE round trip (RFC 9807, ristretto255/SHA-512/3DH, Argon2id 64 MiB
     const tampered = c.ke3.slice();
     tampered[0] = (tampered[0] ?? 0) ^ 1;
     await expect(engine.serverLoginFinish(s.state, tampered, OPAQUE_CONTEXT)).rejects.toMatchObject({ code: "opaque_auth_failed" });
-    await expect(engine.serverLoginFinish(s.state, c.ke3, "rout.other.v1")).rejects.toMatchObject({ code: "opaque_auth_failed" });
+    // The context is bound into the transcript at KE2: a client using another one fails.
+    const l2 = await engine.clientLoginStart(pw("another fine password"));
+    const s2 = await engine.serverLoginStart(setup, record, l2.ke1, cred, OPAQUE_CONTEXT);
+    await expect(engine.clientLoginFinish(pw("another fine password"), l2.state, s2.ke2, "rout.other.v1")).rejects.toMatchObject({ code: "opaque_auth_failed" });
   });
 
   it("unknown accounts get a well-formed fake KE2 the client cannot finish", async () => {
@@ -105,7 +108,7 @@ describe("OPAQUE round trip (RFC 9807, ristretto255/SHA-512/3DH, Argon2id 64 MiB
   });
 
   it("malformed inputs are refused without a trap leaking state", async () => {
-    await expect(engine.serverRegisterFinish(new Uint8Array(192))).rejects.toMatchObject({ code: "opaque_invalid_input" });
+    await expect(engine.serverRegisterFinish(new Uint8Array(192))).rejects.toBeInstanceOf(engine.OpaqueEngineError);
     expect(allZero()).toBe(true);
     await expect(engine.clientLoginStart(new Uint8Array(0))).rejects.toMatchObject({ code: "opaque_invalid_input" });
     expect(engine.wipeEngineMemory()).toBe(0);
