@@ -83,7 +83,47 @@ export type SdmBatchExport = {
   readonly fleetEnvelope: Uint8Array;
 };
 
+/** OPAQUE server setup as stored (db-pending/0270): RVE1 kind opk, sealed to a server key. */
+export type PakeSetupEnvelope = { readonly kid: Uint8Array; readonly envelope: Uint8Array };
+/** One OPAQUE registration record (192 bytes) and the identifiers it was made under. */
+export type PakeRegistration = { readonly credentialId: Uint8Array; readonly record: Uint8Array; readonly setupKid: Uint8Array };
+export type PakeRegistrationWrite = PakeRegistration & { readonly lookup: Uint8Array };
+export const AUTH_POW_PURPOSES = ["opaque_login", "opaque_signup", "opaque_register"] as const;
+export type AuthPowPurpose = (typeof AUTH_POW_PURPOSES)[number];
+/** A one-time Hashcash challenge minted on the database clock. */
+export type AuthPowChallenge = { readonly id: string; readonly challenge: Uint8Array; readonly bits: number; readonly expiresAt: string };
+
 export interface IVaultPort {
+  /** Whether the OPAQUE schema (db-pending/0270) is live. */
+  pakeAvailable(): Promise<boolean>;
+  /** The active OPAQUE setup envelope (anonymous: needed before sign-in). */
+  activePakeSetup(): Promise<PakeSetupEnvelope | null>;
+  /** Registers the first OPAQUE setup; false when one is already active. */
+  registerPakeSetup(caller: VaultCaller, setup: PakeSetupEnvelope): Promise<boolean>;
+  /** A server recipient key by id without a member context (system envelopes only). */
+  systemServerKey(kid: Uint8Array): Promise<WrappedServerKey | null>;
+  /** Mints a one-time PoW challenge; difficulty is decided by the database. */
+  issueAuthPow(purpose: AuthPowPurpose, scope: Uint8Array): Promise<AuthPowChallenge | null>;
+  /** Spends a PoW challenge; true only for valid work on the right purpose and scope. */
+  consumeAuthPow(id: string, nonce: Uint8Array, purpose: AuthPowPurpose, scope: Uint8Array): Promise<boolean>;
+  /** The registration behind a lookup digest, or null (then the fake-record path runs). */
+  pakeRegistrationForLogin(lookup: Uint8Array): Promise<PakeRegistration | null>;
+  /** Whether a Better Auth identity has an OPAQUE password. */
+  pakeRegistered(authUserId: string): Promise<boolean>;
+  /** Signed-in member sets or replaces their password; spends a fresh passkey proof. */
+  storePakeRegistration(caller: VaultCaller, reg: PakeRegistrationWrite, stepUp: PasskeyStepUp): Promise<boolean>;
+  /** New account by password: caller is the fresh Better Auth identity. */
+  storePakeSignupRegistration(caller: VaultCaller, reg: PakeRegistrationWrite): Promise<boolean>;
+  /** Removes the caller's password (never their last way in); spends a fresh passkey proof. */
+  removePakeRegistration(caller: VaultCaller, stepUp: PasskeyStepUp): Promise<boolean>;
+  /** Stores the sealed server KE2 state for 60 s. */
+  beginPakeLogin(handshakeId: string, lookup: Uint8Array, stateSealed: Uint8Array): Promise<boolean>;
+  /** Claims a handshake once; null when unknown, expired or already claimed. */
+  claimPakeLogin(handshakeId: string): Promise<{ lookup: Uint8Array; stateSealed: Uint8Array } | null>;
+  /** After KE3 verified: the Better Auth identity of the registration, or null. */
+  grantPakeLogin(handshakeId: string): Promise<string | null>;
+  /** Records a failed proof on the audit chain. */
+  denyPakeLogin(handshakeId: string): Promise<void>;
   /** Records a just-verified passkey step-up on the enclave's own clock. */
   registerPasskeyStepUp(caller: VaultCaller, proofId: string): Promise<void>;
   storeToken<K extends OpaqueTokenKind>(caller: VaultCaller, kind: K, envelope: Uint8Array): Promise<OpaqueToken<K>>;
@@ -257,8 +297,157 @@ async function defaultExecutor(userId: string, query: string, params: readonly u
   return (await withDbContext({ userId, workspaceId: null }, () => run(query, [...params]))).rows;
 }
 
+const PakeSetupRow = z.object({ kid_hex: z.string().length(32), envelope_hex: z.string().max(4608) });
+const PakeRegRow = z.object({ credential_id_hex: z.string().length(64), record_hex: z.string().length(384), setup_kid_hex: z.string().length(32) });
+const PowRow = z.object({ id: z.string().regex(UUID_RE), challenge_hex: z.string().length(64), bits: z.number().int().min(16).max(26), expires_at: z.string() });
+const HandshakeRow = z.object({ lookup_hex: z.string().length(64), state_hex: z.string().max(1200) });
+const AuthIdRow = z.object({ auth_user_id: z.string().regex(UUID_RE).nullable() });
+
+function needLen(bytes: Uint8Array, len: number): string {
+  if (!(bytes instanceof Uint8Array) || bytes.length !== len) throw new VaultDeniedError();
+  return toHex(bytes);
+}
+function needUuid(id: string): string {
+  if (typeof id !== "string" || !UUID_RE.test(id)) throw new VaultDeniedError();
+  return id;
+}
+function okOf(rows: readonly Record<string, unknown>[]): boolean {
+  const row = RegisterRow.safeParse(rows[0]);
+  if (!row.success) throw new VaultDeniedError();
+  return row.data.ok;
+}
+
 export class LocalPostgresVaultAdapter implements IVaultPort {
   constructor(private readonly exec: VaultSqlExecutor = defaultExecutor) {}
+
+  async pakeAvailable(): Promise<boolean> {
+    const rows = await this.exec(NO_CALLER, "select to_regprocedure('vault_enclave.pake_setup_active()') is not null as ok", []);
+    return rows[0]?.["ok"] === true;
+  }
+
+  async activePakeSetup(): Promise<PakeSetupEnvelope | null> {
+    const rows = await this.exec(NO_CALLER, "select encode(kid, 'hex') as kid_hex, encode(envelope, 'hex') as envelope_hex from vault_enclave.pake_setup_active()", []);
+    if (rows.length === 0) return null;
+    const row = PakeSetupRow.safeParse(rows[0]);
+    if (!row.success) throw new VaultDeniedError();
+    return { kid: fromHex(row.data.kid_hex), envelope: fromHex(row.data.envelope_hex) };
+  }
+
+  async registerPakeSetup(caller: VaultCaller, setup: PakeSetupEnvelope): Promise<boolean> {
+    const rows = await this.exec(
+      callerId(caller),
+      "select vault_enclave.register_pake_setup(decode($1, 'hex'), decode($2, 'hex')) as ok",
+      [needLen(setup.kid, 16), toHex(setup.envelope)],
+    );
+    return okOf(rows);
+  }
+
+  async systemServerKey(kid: Uint8Array): Promise<WrappedServerKey | null> {
+    return serverKeyOf(await this.exec(NO_CALLER, `select ${SERVER_KEY_COLUMNS} from vault_enclave.server_key_get(decode($1, 'hex'))`, [needLen(kid, 16)]));
+  }
+
+  async issueAuthPow(purpose: AuthPowPurpose, scope: Uint8Array): Promise<AuthPowChallenge | null> {
+    if (!AUTH_POW_PURPOSES.includes(purpose)) throw new VaultDeniedError();
+    const rows = await this.exec(
+      NO_CALLER,
+      "select id::text as id, encode(challenge, 'hex') as challenge_hex, bits, to_json(expires_at)#>>'{}' as expires_at from vault_enclave.auth_pow_issue($1, decode($2, 'hex'))",
+      [purpose, needLen(scope, 32)],
+    );
+    if (rows.length === 0) return null;
+    const row = PowRow.safeParse(rows[0]);
+    if (!row.success) throw new VaultDeniedError();
+    return { id: row.data.id, challenge: fromHex(row.data.challenge_hex), bits: row.data.bits, expiresAt: row.data.expires_at };
+  }
+
+  async consumeAuthPow(id: string, nonce: Uint8Array, purpose: AuthPowPurpose, scope: Uint8Array): Promise<boolean> {
+    if (!UUID_RE.test(id) || !(nonce instanceof Uint8Array) || nonce.length !== 8 || !AUTH_POW_PURPOSES.includes(purpose)) return false;
+    const rows = await this.exec(
+      NO_CALLER,
+      "select vault_enclave.auth_pow_consume($1::uuid, decode($2, 'hex'), $3, decode($4, 'hex')) as ok",
+      [id, toHex(nonce), purpose, needLen(scope, 32)],
+    );
+    return okOf(rows);
+  }
+
+  async pakeRegistrationForLogin(lookup: Uint8Array): Promise<PakeRegistration | null> {
+    const rows = await this.exec(
+      NO_CALLER,
+      "select encode(credential_id, 'hex') as credential_id_hex, encode(record, 'hex') as record_hex, encode(setup_kid, 'hex') as setup_kid_hex from vault_enclave.pake_registration_for_login(decode($1, 'hex'))",
+      [needLen(lookup, 32)],
+    );
+    if (rows.length === 0) return null;
+    const row = PakeRegRow.safeParse(rows[0]);
+    if (!row.success) throw new VaultDeniedError();
+    return { credentialId: fromHex(row.data.credential_id_hex), record: fromHex(row.data.record_hex), setupKid: fromHex(row.data.setup_kid_hex) };
+  }
+
+  async pakeRegistered(authUserId: string): Promise<boolean> {
+    const rows = await this.exec(NO_CALLER, "select vault_enclave.pake_registered($1::uuid) as ok", [needUuid(authUserId)]);
+    return okOf(rows);
+  }
+
+  private regParams(reg: PakeRegistrationWrite): string[] {
+    return [needLen(reg.lookup, 32), needLen(reg.credentialId, 32), needLen(reg.record, 192), needLen(reg.setupKid, 16)];
+  }
+
+  async storePakeRegistration(caller: VaultCaller, reg: PakeRegistrationWrite, stepUp: PasskeyStepUp): Promise<boolean> {
+    if (stepUp.verified !== true || !UUID_RE.test(stepUp.proofId)) throw new VaultDeniedError();
+    const rows = await this.exec(
+      callerId(caller),
+      "select vault_enclave.store_pake_registration(decode($1, 'hex'), decode($2, 'hex'), decode($3, 'hex'), decode($4, 'hex'), $5::uuid) as ok",
+      [...this.regParams(reg), stepUp.proofId],
+    );
+    return okOf(rows);
+  }
+
+  async storePakeSignupRegistration(caller: VaultCaller, reg: PakeRegistrationWrite): Promise<boolean> {
+    const rows = await this.exec(
+      callerId(caller),
+      "select vault_enclave.store_pake_signup_registration(decode($1, 'hex'), decode($2, 'hex'), decode($3, 'hex'), decode($4, 'hex')) as ok",
+      this.regParams(reg),
+    );
+    return okOf(rows);
+  }
+
+  async removePakeRegistration(caller: VaultCaller, stepUp: PasskeyStepUp): Promise<boolean> {
+    if (stepUp.verified !== true || !UUID_RE.test(stepUp.proofId)) throw new VaultDeniedError();
+    const rows = await this.exec(callerId(caller), "select vault_enclave.remove_pake_registration($1::uuid) as ok", [stepUp.proofId]);
+    return okOf(rows);
+  }
+
+  async beginPakeLogin(handshakeId: string, lookup: Uint8Array, stateSealed: Uint8Array): Promise<boolean> {
+    if (!(stateSealed instanceof Uint8Array) || stateSealed.length < 41 || stateSealed.length > 600) throw new VaultDeniedError();
+    const rows = await this.exec(
+      NO_CALLER,
+      "select vault_enclave.pake_login_begin($1::uuid, decode($2, 'hex'), decode($3, 'hex')) as ok",
+      [needUuid(handshakeId), needLen(lookup, 32), toHex(stateSealed)],
+    );
+    return okOf(rows);
+  }
+
+  async claimPakeLogin(handshakeId: string): Promise<{ lookup: Uint8Array; stateSealed: Uint8Array } | null> {
+    if (!UUID_RE.test(handshakeId)) return null;
+    const rows = await this.exec(
+      NO_CALLER,
+      "select encode(lookup_digest, 'hex') as lookup_hex, encode(state_sealed, 'hex') as state_hex from vault_enclave.pake_login_claim($1::uuid)",
+      [handshakeId],
+    );
+    if (rows.length === 0) return null;
+    const row = HandshakeRow.safeParse(rows[0]);
+    if (!row.success) throw new VaultDeniedError();
+    return { lookup: fromHex(row.data.lookup_hex), stateSealed: fromHex(row.data.state_hex) };
+  }
+
+  async grantPakeLogin(handshakeId: string): Promise<string | null> {
+    const rows = await this.exec(NO_CALLER, "select vault_enclave.pake_login_granted($1::uuid)::text as auth_user_id", [needUuid(handshakeId)]);
+    const row = AuthIdRow.safeParse(rows[0]);
+    if (!row.success) throw new VaultDeniedError();
+    return row.data.auth_user_id;
+  }
+
+  async denyPakeLogin(handshakeId: string): Promise<void> {
+    await this.exec(NO_CALLER, "select vault_enclave.pake_login_denied($1::uuid)", [needUuid(handshakeId)]);
+  }
 
   async registerPasskeyStepUp(caller: VaultCaller, proofId: string): Promise<void> {
     if (!UUID_RE.test(proofId)) throw new VaultDeniedError();
