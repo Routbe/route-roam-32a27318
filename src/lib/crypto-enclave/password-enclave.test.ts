@@ -9,7 +9,7 @@ import { describe, expect, it } from "vitest";
 import { leadingZeroBits, powDigest } from "./hashcash";
 import { runEnclaveOp } from "./enclave-core";
 import * as engine from "./opaque-engine";
-import { beginOperation, endOperation, requestAbort } from "./operation-control";
+import { requestAbort } from "./operation-control";
 import { OPAQUE_CONTEXT } from "./opaque-wire";
 import { slotResidueForTest } from "./password-enclave";
 import type { EnclaveOp, EnclaveOps } from "./protocol";
@@ -72,13 +72,14 @@ describe("pow.solve", () => {
   });
 
   it("stops at the next batch boundary after an abort for the running operation only", async () => {
-    beginOperation(41);
+    requestAbort(41); // before it runs: ignored
+    const running = runEnclaveOp("pow.solve", { challenge: crypto.getRandomValues(new Uint8Array(32)), bits: 26 }, 41);
     requestAbort(40); // another operation: ignored
-    const running = runEnclaveOp("pow.solve", { challenge: crypto.getRandomValues(new Uint8Array(32)), bits: 26 });
+    await new Promise((r) => setTimeout(r, 5));
     requestAbort(41);
-    const r = await running;
-    endOperation(41);
-    expect(r).toEqual({ ok: false, code: "aborted" });
+    expect(await running).toEqual({ ok: false, code: "aborted" });
+    // The next operation with the same id is not pre-aborted.
+    expect((await runEnclaveOp("pow.solve", { challenge: new Uint8Array(32).fill(1), bits: 16 }, 41)).ok).toBe(true);
   });
 
   it("refuses difficulties outside the server range", async () => {
