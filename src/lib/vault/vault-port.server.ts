@@ -16,6 +16,7 @@ import { z } from "zod";
 import { cleanContextId } from "@/lib/db-context";
 import { ENVELOPE_MAX_BYTES } from "@/lib/crypto-enclave/pqc-envelope";
 import { isTapGrant, OPAQUE_TOKEN_KINDS, opaqueTokenKind, parseOpaqueToken, type OpaqueToken, type OpaqueTokenKind, type TapGrant } from "./token-boundary";
+export type { TapGrant } from "./token-boundary";
 
 /** An authenticated member (public user id from the server session, never from input). */
 export type VaultCaller = { readonly userId: string };
