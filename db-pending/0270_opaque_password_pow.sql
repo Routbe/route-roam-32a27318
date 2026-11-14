@@ -363,6 +363,7 @@ declare
   v_caller uuid := vault_enclave.caller_user_id();
   v_now timestamptz := pg_catalog.clock_timestamp();
   v_auth uuid;
+  v_rows integer;
   v_proof vault_enclave.step_up_proofs%rowtype;
 begin
   if v_caller is null then
@@ -380,9 +381,10 @@ begin
     perform vault_enclave.append_audit(v_caller, 'pake_unregister', 'denied', 'last_sign_in_method', null); return false;
   end if;
   delete from vault_enclave.pake_registrations r where r.auth_user_id = v_auth;
-  perform vault_enclave.append_audit(v_caller, 'pake_unregister', case when found then 'granted' else 'denied' end,
-                                     case when found then 'ok' else 'none' end, null);
-  return found;
+  get diagnostics v_rows = row_count;
+  perform vault_enclave.append_audit(v_caller, 'pake_unregister', case when v_rows > 0 then 'granted' else 'denied' end,
+                                     case when v_rows > 0 then 'ok' else 'none' end, null);
+  return v_rows > 0;
 end $$;
 
 -- ---------------------------------------------------------------- login handshakes
@@ -390,7 +392,9 @@ end $$;
 -- Stores the sealed KE2 state for 60 s; at most 5 open handshakes per digest.
 create function vault_enclave.pake_login_begin(p_id uuid, p_lookup bytea, p_state_sealed bytea)
 returns boolean language plpgsql security definer set search_path = pg_catalog, pg_temp as $$
-declare v_now timestamptz := pg_catalog.clock_timestamp();
+declare
+  v_now timestamptz := pg_catalog.clock_timestamp();
+  v_rows integer;
 begin
   if p_id is null or p_lookup is null or octet_length(p_lookup) <> 32 then return false; end if;
   if (select pg_catalog.count(*) from vault_enclave.pake_handshakes h
@@ -400,7 +404,8 @@ begin
   insert into vault_enclave.pake_handshakes (id, lookup_digest, state_sealed, created_at, expires_at)
   values (p_id, p_lookup, p_state_sealed, v_now, v_now + interval '60 seconds')
   on conflict do nothing;
-  return found;
+  get diagnostics v_rows = row_count;
+  return v_rows = 1;
 exception when check_violation then
   return false;
 end $$;
